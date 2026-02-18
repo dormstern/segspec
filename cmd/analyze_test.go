@@ -173,6 +173,67 @@ func TestAnalyzeE2E_DetectsMultipleSourceTypes(t *testing.T) {
 	}
 }
 
+func TestIsGitHubURL(t *testing.T) {
+	tests := []struct {
+		input string
+		want  bool
+	}{
+		// Positive cases
+		{"https://github.com/org/repo", true},
+		{"https://github.com/org/repo.git", true},
+		{"https://github.com/some-org/some-repo", true},
+		{"github.com/org/repo", true},
+		{"github.com/org/repo.git", true},
+		{"http://github.com/org/repo", true},
+		{"HTTPS://GITHUB.COM/ORG/REPO", true},
+		{"GitHub.com/Org/Repo", true},
+
+		// Negative cases — local paths
+		{"./my-app", false},
+		{"/home/user/project", false},
+		{"../relative/path", false},
+		{".", false},
+		{"my-app", false},
+
+		// Negative cases — non-GitHub URLs
+		{"https://gitlab.com/org/repo", false},
+		{"https://bitbucket.org/org/repo", false},
+		{"https://example.com/github.com/org/repo", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			got := isGitHubURL(tt.input)
+			if got != tt.want {
+				t.Errorf("isGitHubURL(%q) = %v, want %v", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestNormalizeGitHubURL(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"https://github.com/org/repo", "https://github.com/org/repo"},
+		{"https://github.com/org/repo.git", "https://github.com/org/repo.git"},
+		{"http://github.com/org/repo", "http://github.com/org/repo"},
+		{"github.com/org/repo", "https://github.com/org/repo"},
+		{"github.com/org/repo.git", "https://github.com/org/repo.git"},
+		{"GitHub.com/Org/Repo", "https://GitHub.com/Org/Repo"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			got := normalizeGitHubURL(tt.input)
+			if got != tt.want {
+				t.Errorf("normalizeGitHubURL(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
 func findFixtureDir(t *testing.T) string {
 	t.Helper()
 	// Try relative to module root

@@ -3,6 +3,8 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"os/exec"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -19,6 +21,15 @@ var analyzeCmd = &cobra.Command{
 	Short: "Analyze application configs and generate network policies",
 	Long: `Analyze scans a directory for application configuration files,
 extracts network dependencies, and generates Kubernetes NetworkPolicy YAML.
+
+The argument can be a local directory path or a GitHub repository URL.
+When a GitHub URL is provided, the repository is shallow-cloned to a
+temporary directory, analyzed, and then cleaned up automatically.
+
+Supported URL formats:
+  - https://github.com/org/repo
+  - https://github.com/org/repo.git
+  - github.com/org/repo (scheme is added automatically)
 
 Supported file types:
   - Spring: application.yml, application.properties
@@ -37,8 +48,54 @@ func init() {
 	rootCmd.AddCommand(analyzeCmd)
 }
 
+// isGitHubURL reports whether arg looks like a GitHub repository URL.
+func isGitHubURL(arg string) bool {
+	lower := strings.ToLower(arg)
+	return strings.HasPrefix(lower, "https://github.com/") ||
+		strings.HasPrefix(lower, "http://github.com/") ||
+		strings.HasPrefix(lower, "github.com/")
+}
+
+// normalizeGitHubURL ensures the URL has an https:// scheme.
+func normalizeGitHubURL(raw string) string {
+	lower := strings.ToLower(raw)
+	if strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://") {
+		return raw
+	}
+	return "https://" + raw
+}
+
+// cloneRepo shallow-clones the given git URL into a temp directory and
+// returns the directory path. The caller is responsible for removing it.
+func cloneRepo(url string) (string, error) {
+	tmpDir, err := os.MkdirTemp("", "segspec-clone-*")
+	if err != nil {
+		return "", fmt.Errorf("failed to create temp directory: %w", err)
+	}
+
+	gitCmd := exec.Command("git", "clone", "--depth", "1", url, tmpDir)
+	gitCmd.Stderr = os.Stderr
+	if err := gitCmd.Run(); err != nil {
+		os.RemoveAll(tmpDir)
+		return "", fmt.Errorf("git clone failed: %w", err)
+	}
+	return tmpDir, nil
+}
+
 func runAnalyze(cmd *cobra.Command, args []string) error {
 	path := args[0]
+
+	// If the argument looks like a GitHub URL, clone it first.
+	if isGitHubURL(path) {
+		url := normalizeGitHubURL(path)
+		fmt.Fprintf(os.Stderr, "Cloning %s...\n", url)
+		cloneDir, err := cloneRepo(url)
+		if err != nil {
+			return err
+		}
+		defer os.RemoveAll(cloneDir)
+		path = cloneDir
+	}
 
 	info, err := os.Stat(path)
 	if err != nil {
