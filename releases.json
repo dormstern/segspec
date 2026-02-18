@@ -1,0 +1,26 @@
+{
+  "product": "segspec",
+  "schema_version": "2.0.0",
+  "contract_mode": "none",
+  "releases": [],
+  "current_cycle": {
+    "phase": "BUILD",
+    "version": "1.0.0",
+    "name": "Genesis",
+    "thesis": "Initial launch delivering config-to-NetworkPolicy generation for platform engineers who need microsegmentation without manual traffic analysis",
+    "identity_version": "1.0",
+    "started": "2026-02-18",
+    "shaped_features": [],
+    "shaped_debt": [],
+    "kill_list": [],
+    "appetite_exclusions": [
+      "Java bytecode analysis (v1.1)",
+      "Docker image scanning (v1.2)",
+      "Multi-format output (v2)",
+      "Runtime validation / javaagent (v3)",
+      "Web UI or API server",
+      "Telemetry or analytics"
+    ],
+    "signals": []
+  }
+}
