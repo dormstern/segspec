@@ -20,6 +20,7 @@ import (
 )
 
 var aiProvider string
+var interactive bool
 
 var analyzeCmd = &cobra.Command{
 	Use:   "analyze <path>",
@@ -54,6 +55,7 @@ AI-powered analysis (--ai flag):
 func init() {
 	analyzeCmd.Flags().StringVar(&aiProvider, "ai", "", "AI backend: 'local' (Ollama), 'cloud' (Gemini), or omit for auto-detect")
 	analyzeCmd.Flag("ai").NoOptDefVal = "auto"
+	analyzeCmd.Flags().BoolVarP(&interactive, "interactive", "i", false, "Review dependencies interactively before generating output")
 	rootCmd.AddCommand(analyzeCmd)
 }
 
@@ -158,6 +160,23 @@ func runAnalyze(cmd *cobra.Command, args []string) error {
 	if ds.Len() == 0 {
 		fmt.Fprintln(cmd.OutOrStdout(), "No network dependencies found.")
 		return nil
+	}
+
+	if interactive {
+		if fileInfo, _ := os.Stdout.Stat(); fileInfo.Mode()&os.ModeCharDevice == 0 {
+			fmt.Fprintln(os.Stderr, "Warning: --interactive requires a terminal, falling back to non-interactive")
+		} else {
+			selected, ok := tui.Run(ds.Dependencies())
+			if !ok {
+				fmt.Fprintln(os.Stderr, "Cancelled.")
+				return nil
+			}
+			filtered := model.NewDependencySet(ds.ServiceName)
+			for _, dep := range selected {
+				filtered.Add(dep)
+			}
+			ds = filtered
+		}
 	}
 
 	out := cmd.OutOrStdout()
