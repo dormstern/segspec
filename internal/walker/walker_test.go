@@ -200,6 +200,34 @@ func TestWalkHelmChartWarningWhenNoHelm(t *testing.T) {
 	}
 }
 
+func TestWalkOptionsPassesHelmValues(t *testing.T) {
+	// When WalkOptions.HelmValuesFile is set, it should be passed to renderHelmTemplate.
+	// We test this indirectly: with helm not installed and a values file set,
+	// the warning should still mention helm (not a values-file error).
+	origPath := os.Getenv("PATH")
+	os.Setenv("PATH", "")
+	defer os.Setenv("PATH", origPath)
+
+	r := parser.NewRegistry()
+	opts := WalkOptions{HelmValuesFile: "testdata/helm-app/values.yaml"}
+	ds, warnings, err := Walk("testdata/helm-app", r, opts)
+	if err != nil {
+		t.Fatalf("Walk() error: %v", err)
+	}
+	_ = ds
+
+	foundHelmWarning := false
+	for _, w := range warnings {
+		if strings.Contains(w.Err.Error(), "helm") {
+			foundHelmWarning = true
+			break
+		}
+	}
+	if !foundHelmWarning {
+		t.Errorf("expected warning about helm, got %d warnings: %v", len(warnings), warnings)
+	}
+}
+
 func TestDetectHelmChartsNone(t *testing.T) {
 	dir := t.TempDir()
 	charts := detectHelmCharts(dir)

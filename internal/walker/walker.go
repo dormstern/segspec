@@ -46,11 +46,20 @@ func detectHelmCharts(root string) []string {
 	return charts
 }
 
+// WalkOptions configures optional behavior for Walk.
+type WalkOptions struct {
+	HelmValuesFile string // Helm values file to use when rendering charts (optional)
+}
+
 // Walk recursively scans root for files matching registered parsers,
 // collects all discovered network dependencies, and returns them as a DependencySet.
 // Per-file parse failures are returned as warnings (not fatal errors).
 // The error return is reserved for fatal errors such as inability to walk the directory.
-func Walk(root string, registry *parser.Registry) (*model.DependencySet, []WalkWarning, error) {
+func Walk(root string, registry *parser.Registry, opts ...WalkOptions) (*model.DependencySet, []WalkWarning, error) {
+	var options WalkOptions
+	if len(opts) > 0 {
+		options = opts[0]
+	}
 	serviceName := filepath.Base(root)
 	ds := model.NewDependencySet(serviceName)
 	var warnings []WalkWarning
@@ -90,7 +99,7 @@ func Walk(root string, registry *parser.Registry) (*model.DependencySet, []WalkW
 	// After normal file walk, detect and process Helm charts
 	charts := detectHelmCharts(root)
 	for _, chartDir := range charts {
-		rendered, renderErr := renderHelmTemplate(chartDir, "")
+		rendered, renderErr := renderHelmTemplate(chartDir, options.HelmValuesFile)
 		if renderErr != nil {
 			relPath, relErr := filepath.Rel(root, chartDir)
 			if relErr != nil {

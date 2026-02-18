@@ -21,6 +21,7 @@ import (
 
 var aiProvider string
 var interactive bool
+var helmValuesFile string
 
 var analyzeCmd = &cobra.Command{
 	Use:   "analyze <path>",
@@ -56,6 +57,7 @@ func init() {
 	analyzeCmd.Flags().StringVar(&aiProvider, "ai", "", "AI backend: 'local' (Ollama), 'cloud' (Gemini), or omit for auto-detect")
 	analyzeCmd.Flag("ai").NoOptDefVal = "auto"
 	analyzeCmd.Flags().BoolVarP(&interactive, "interactive", "i", false, "Review dependencies interactively before generating output")
+	analyzeCmd.Flags().StringVar(&helmValuesFile, "helm-values", "", "Helm values file to use when rendering charts")
 	rootCmd.AddCommand(analyzeCmd)
 }
 
@@ -138,7 +140,8 @@ func runAnalyze(cmd *cobra.Command, args []string) error {
 
 	registry := parser.DefaultRegistry()
 
-	ds, warnings, err := walker.Walk(path, registry)
+	walkOpts := walker.WalkOptions{HelmValuesFile: helmValuesFile}
+	ds, warnings, err := walker.Walk(path, registry, walkOpts)
 	if err != nil {
 		return fmt.Errorf("analysis failed: %w", err)
 	}
