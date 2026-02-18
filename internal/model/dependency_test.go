@@ -77,6 +77,39 @@ func TestDependencySet_Sources(t *testing.T) {
 	}
 }
 
+func TestDependencySet_IngressFor(t *testing.T) {
+	ds := NewDependencySet("myapp")
+	ds.Add(NetworkDependency{Source: "frontend", Target: "cartservice", Port: 8080, Protocol: "TCP"})
+	ds.Add(NetworkDependency{Source: "checkout", Target: "cartservice", Port: 8080, Protocol: "TCP"})
+	ds.Add(NetworkDependency{Source: "cartservice", Target: "redis", Port: 6379, Protocol: "TCP"})
+	ds.Add(NetworkDependency{Source: "frontend", Target: "productcatalog", Port: 3550, Protocol: "TCP"})
+
+	ingress := ds.IngressFor("cartservice")
+	if len(ingress) != 2 {
+		t.Fatalf("got %d ingress deps for cartservice, want 2", len(ingress))
+	}
+	// Should be sorted by Key()
+	if ingress[0].Source != "checkout" {
+		t.Errorf("ingress[0].Source = %q, want checkout", ingress[0].Source)
+	}
+	if ingress[1].Source != "frontend" {
+		t.Errorf("ingress[1].Source = %q, want frontend", ingress[1].Source)
+	}
+
+	// Service with no ingress
+	ingress = ds.IngressFor("redis")
+	// redis has ingress from cartservice
+	if len(ingress) != 1 {
+		t.Fatalf("got %d ingress deps for redis, want 1", len(ingress))
+	}
+
+	// Unknown service
+	ingress = ds.IngressFor("nonexistent")
+	if len(ingress) != 0 {
+		t.Fatalf("got %d ingress deps for nonexistent, want 0", len(ingress))
+	}
+}
+
 func TestDependenciesSorted(t *testing.T) {
 	ds := NewDependencySet("app")
 	ds.Add(NetworkDependency{Source: "app", Target: "zookeeper", Port: 2181, Protocol: "TCP"})
