@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/dormorgenstern/segspec/internal/model"
@@ -168,6 +169,34 @@ func TestDetectHelmCharts(t *testing.T) {
 	}
 	if charts[0] != "testdata/helm-app" {
 		t.Errorf("chart path = %q, want %q", charts[0], "testdata/helm-app")
+	}
+}
+
+func TestWalkHelmChartWarningWhenNoHelm(t *testing.T) {
+	// When helm is not installed, Walk should produce a warning for Helm charts
+	// Save PATH and set to empty to simulate helm not found
+	origPath := os.Getenv("PATH")
+	os.Setenv("PATH", "")
+	defer os.Setenv("PATH", origPath)
+
+	r := parser.NewRegistry()
+	ds, warnings, err := Walk("testdata/helm-app", r)
+	if err != nil {
+		t.Fatalf("Walk() error: %v", err)
+	}
+	// Should not crash even without helm
+	_ = ds
+
+	// Should have a warning about helm not being installed
+	foundHelmWarning := false
+	for _, w := range warnings {
+		if strings.Contains(w.Err.Error(), "helm") {
+			foundHelmWarning = true
+			break
+		}
+	}
+	if !foundHelmWarning {
+		t.Errorf("expected warning about helm not installed, got %d warnings: %v", len(warnings), warnings)
 	}
 }
 

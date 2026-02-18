@@ -87,5 +87,35 @@ func Walk(root string, registry *parser.Registry) (*model.DependencySet, []WalkW
 		return nil
 	})
 
+	// After normal file walk, detect and process Helm charts
+	charts := detectHelmCharts(root)
+	for _, chartDir := range charts {
+		rendered, renderErr := renderHelmTemplate(chartDir, "")
+		if renderErr != nil {
+			relPath, relErr := filepath.Rel(root, chartDir)
+			if relErr != nil {
+				relPath = chartDir
+			}
+			warnings = append(warnings, WalkWarning{File: relPath + "/Chart.yaml", Err: renderErr})
+			continue
+		}
+		relPath, relErr := filepath.Rel(root, chartDir)
+		if relErr != nil {
+			relPath = chartDir
+		}
+		sourceLabel := relPath + "/Chart.yaml (helm template)"
+		deps, parseErr := parser.ParseK8sContent(rendered, sourceLabel)
+		if parseErr != nil {
+			warnings = append(warnings, WalkWarning{File: relPath, Err: parseErr})
+			continue
+		}
+		for i := range deps {
+			if deps[i].Source == "" {
+				deps[i].Source = serviceName
+			}
+			ds.Add(deps[i])
+		}
+	}
+
 	return ds, warnings, err
 }

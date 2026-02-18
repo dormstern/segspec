@@ -33,6 +33,24 @@ func parseK8s(path string) ([]model.NetworkDependency, error) {
 		return nil, nil
 	}
 
+	return parseK8sBytes(data, path)
+}
+
+// ParseK8sContent parses K8s manifest YAML content (multi-document) and returns
+// discovered network dependencies. Used for parsing helm template output.
+// sourceLabel is used as the SourceFile in returned dependencies.
+func ParseK8sContent(content string, sourceLabel string) ([]model.NetworkDependency, error) {
+	data := []byte(content)
+
+	if !k8sMarker(data) {
+		return nil, nil
+	}
+
+	return parseK8sBytes(data, sourceLabel)
+}
+
+// parseK8sBytes is the shared implementation for parsing K8s manifest bytes.
+func parseK8sBytes(data []byte, sourceLabel string) ([]model.NetworkDependency, error) {
 	var deps []model.NetworkDependency
 
 	decoder := yaml.NewDecoder(bytes.NewReader(data))
@@ -49,11 +67,11 @@ func parseK8s(path string) ([]model.NetworkDependency, error) {
 		kind, _ := doc["kind"].(string)
 		switch kind {
 		case "Deployment", "StatefulSet":
-			deps = append(deps, parseWorkload(doc, path)...)
+			deps = append(deps, parseWorkload(doc, sourceLabel)...)
 		case "Service":
-			deps = append(deps, parseService(doc, path)...)
+			deps = append(deps, parseService(doc, sourceLabel)...)
 		case "ConfigMap":
-			deps = append(deps, parseConfigMap(doc, path)...)
+			deps = append(deps, parseConfigMap(doc, sourceLabel)...)
 		}
 	}
 

@@ -346,6 +346,90 @@ cache:
 	}
 }
 
+func TestParseK8sContent(t *testing.T) {
+	// Simulates rendered Helm output (multi-document YAML)
+	content := `---
+# Source: helm-app/templates/deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: myapp
+spec:
+  template:
+    spec:
+      containers:
+        - name: app
+          image: "myapp:latest"
+          ports:
+            - containerPort: 8080
+          env:
+            - name: REDIS_HOST
+              value: "redis-cache:6379"
+---
+# Source: helm-app/templates/service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: myapp-svc
+spec:
+  ports:
+    - port: 80
+      targetPort: 8080
+`
+	deps, err := ParseK8sContent(content, "helm-app/Chart.yaml (helm template)")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Expect:
+	// 1 container port (8080)
+	// 1 host:port dep (redis-cache:6379)
+	// 1 service port (80)
+	// Total: 3
+	assertDepCount(t, deps, 3)
+
+	assertHasDep(t, deps, func(d model.NetworkDependency) bool {
+		return d.Port == 8080 && d.Target == "myapp" && d.Confidence == model.High
+	}, "container port 8080")
+
+	assertHasDep(t, deps, func(d model.NetworkDependency) bool {
+		return d.Target == "redis-cache" && d.Port == 6379
+	}, "redis host:port dep")
+
+	assertHasDep(t, deps, func(d model.NetworkDependency) bool {
+		return d.Source == "myapp-svc" && d.Port == 80
+	}, "service port 80")
+
+	// Verify sourceFile label is set correctly
+	for _, dep := range deps {
+		if dep.SourceFile != "helm-app/Chart.yaml (helm template)" {
+			t.Errorf("dep.SourceFile = %q, want %q", dep.SourceFile, "helm-app/Chart.yaml (helm template)")
+		}
+	}
+}
+
+func TestParseK8sContentNonK8s(t *testing.T) {
+	content := `just some random text
+not yaml at all`
+	deps, err := ParseK8sContent(content, "test-source")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if deps != nil {
+		t.Errorf("expected nil deps for non-K8s content, got %d", len(deps))
+	}
+}
+
+func TestParseK8sContentEmpty(t *testing.T) {
+	deps, err := ParseK8sContent("", "test-source")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if deps != nil {
+		t.Errorf("expected nil deps for empty content, got %d", len(deps))
+	}
+}
+
 // --- test helpers ---
 
 func assertDepCount(t *testing.T, deps []model.NetworkDependency, want int) {
