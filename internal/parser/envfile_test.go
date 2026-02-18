@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/dormorgenstern/segspec/internal/model"
+	"github.com/dormstern/segspec/internal/model"
 )
 
 func TestParseEnvFile_DatabaseURL(t *testing.T) {

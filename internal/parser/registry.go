@@ -3,7 +3,7 @@ package parser
 import (
 	"path/filepath"
 
-	"github.com/dormorgenstern/segspec/internal/model"
+	"github.com/dormstern/segspec/internal/model"
 )
 
 // ParseFunc analyzes a file and returns discovered network dependencies.

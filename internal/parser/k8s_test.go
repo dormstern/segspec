@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/dormorgenstern/segspec/internal/model"
+	"github.com/dormstern/segspec/internal/model"
 )
 
 func writeTempFile(t *testing.T, name, content string) string {

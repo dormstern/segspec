@@ -6,7 +6,7 @@ builds:
     env:
       - CGO_ENABLED=0
     ldflags:
-      - -s -w -X github.com/dormorgenstern/segspec/cmd.Version={{.Version}}
+      - -s -w -X github.com/dormstern/segspec/cmd.Version={{.Version}}
     goos:
       - linux
       - darwin

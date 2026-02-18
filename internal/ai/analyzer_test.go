@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/dormorgenstern/segspec/internal/model"
+	"github.com/dormstern/segspec/internal/model"
 )
 
 // mockHTTPClient implements the httpClient interface for testing.

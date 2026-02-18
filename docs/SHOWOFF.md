@@ -65,7 +65,7 @@ chmod +x /usr/local/bin/segspec
 Or with Go:
 
 ```bash
-go install github.com/dormorgenstern/segspec@latest
+go install github.com/dormstern/segspec@latest
 ```
 
 **2. Clone the app repo you want to secure**

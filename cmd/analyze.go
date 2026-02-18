@@ -11,12 +11,12 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/dormorgenstern/segspec/internal/ai"
-	"github.com/dormorgenstern/segspec/internal/model"
-	"github.com/dormorgenstern/segspec/internal/parser"
-	"github.com/dormorgenstern/segspec/internal/renderer"
-	"github.com/dormorgenstern/segspec/internal/tui"
-	"github.com/dormorgenstern/segspec/internal/walker"
+	"github.com/dormstern/segspec/internal/ai"
+	"github.com/dormstern/segspec/internal/model"
+	"github.com/dormstern/segspec/internal/parser"
+	"github.com/dormstern/segspec/internal/renderer"
+	"github.com/dormstern/segspec/internal/tui"
+	"github.com/dormstern/segspec/internal/walker"
 )
 
 var aiProvider string

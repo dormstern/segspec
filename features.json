@@ -7,25 +7,31 @@
       "id": "wave-0",
       "name": "Infrastructure",
       "type": "infrastructure",
-      "release": "1.0.0"
+      "release": "v0.1.0"
     },
     {
       "id": "wave-1",
       "name": "Core Parsers",
       "type": "product",
-      "release": "1.0.0"
+      "release": "v0.1.0"
     },
     {
       "id": "wave-2",
       "name": "Output & UX",
       "type": "product",
-      "release": "1.0.0"
+      "release": "v0.1.0"
     },
     {
       "id": "wave-3",
-      "name": "AI Analysis",
+      "name": "AI Analysis (Dual-Mode)",
       "type": "product",
-      "release": "1.0.0"
+      "release": "v0.2.0"
+    },
+    {
+      "id": "wave-4",
+      "name": "Production Audit Fixes",
+      "type": "quality",
+      "release": "v0.3.0"
     }
   ],
   "features": [
@@ -273,7 +279,7 @@
     {
       "id": "ai-analyzer",
       "name": "LLM-powered dependency analyzer",
-      "intent": "Add --ai flag to analyze command. When enabled, collect all config/source files, send to Claude API with a focused prompt to discover network dependencies that rule-based parsers missed. Merge AI findings with parser findings, mark as confidence 'ai-inferred'. Requires ANTHROPIC_API_KEY env var. Graceful fallback when key absent.",
+      "intent": "Add --ai flag to analyze command with dual-mode AI: local analysis via Ollama/NuExtract for air-gapped environments, cloud analysis via Gemini Flash for higher accuracy. Auto-detect provider based on available backends. Secret redaction before cloud calls. 30s HTTP timeout.",
       "wave": "wave-3",
       "type": "feature",
       "depends_on": [
@@ -292,6 +298,223 @@
       "signal_id": "BOOTSTRAP",
       "requested_by": "Product Lead",
       "rework_of": null
+    }
+    ,
+    {
+      "id": "github-url-clone",
+      "name": "GitHub URL auto-clone",
+      "intent": "Allow `segspec analyze <github-url>` to automatically clone the repository to a temp directory and analyze it. Supports HTTPS and git:// URLs with validation and timeout.",
+      "wave": "wave-2",
+      "type": "feature",
+      "depends_on": [
+        { "id": "e2e-integration", "type": "hard" }
+      ],
+      "priority": 1,
+      "status": "completed",
+      "autonomy": "T2",
+      "estimated_tests": 3,
+      "actual_tests": null,
+      "build_resets": 0,
+      "build_started": null,
+      "quality_score": null,
+      "post_mvp_status": null,
+      "signal_id": "BOOTSTRAP",
+      "requested_by": "Product Lead",
+      "rework_of": null
+    },
+    {
+      "id": "goreleaser-ci",
+      "name": "GoReleaser + CI pipeline",
+      "intent": "Set up GoReleaser for automated binary builds and GitHub Releases, plus CI pipeline for test/lint/build on push.",
+      "wave": "wave-0",
+      "type": "feature",
+      "depends_on": [],
+      "priority": 2,
+      "status": "completed",
+      "autonomy": "T1",
+      "estimated_tests": 0,
+      "actual_tests": 0,
+      "build_resets": 0,
+      "build_started": null,
+      "quality_score": null,
+      "post_mvp_status": null,
+      "signal_id": "BOOTSTRAP",
+      "requested_by": "Product Lead",
+      "rework_of": null
+    },
+    {
+      "id": "readme",
+      "name": "README documentation",
+      "intent": "Project README with installation, usage, examples, and architecture overview for the v0.1.0 launch.",
+      "wave": "wave-0",
+      "type": "feature",
+      "depends_on": [],
+      "priority": 2,
+      "status": "completed",
+      "autonomy": "T1",
+      "estimated_tests": 0,
+      "actual_tests": 0,
+      "build_resets": 0,
+      "build_started": null,
+      "quality_score": null,
+      "post_mvp_status": null,
+      "signal_id": "BOOTSTRAP",
+      "requested_by": "Product Lead",
+      "rework_of": null
+    },
+    {
+      "id": "audit-netpol-selectors",
+      "name": "Production-valid NetworkPolicy selectors",
+      "intent": "Fix NetworkPolicy renderer to generate proper destination selectors (podSelector, namespaceSelector, ipBlock) instead of empty selectors. Add default-deny base policies. Skip port 0 entries. Add sanitizeName for label-safe names.",
+      "wave": "wave-4",
+      "type": "fix",
+      "depends_on": [
+        { "id": "renderer-netpol", "type": "hard" }
+      ],
+      "priority": 1,
+      "status": "completed",
+      "autonomy": "T2",
+      "estimated_tests": null,
+      "actual_tests": null,
+      "build_resets": 0,
+      "build_started": null,
+      "quality_score": null,
+      "post_mvp_status": null,
+      "signal_id": "AUDIT-V0.3.0",
+      "requested_by": "QA Agent",
+      "rework_of": "renderer-netpol"
+    },
+    {
+      "id": "audit-secret-redaction",
+      "name": "Secret redaction before cloud AI calls",
+      "intent": "Redact secrets, API keys, passwords, and tokens from config file contents before sending to any cloud AI provider. Prevents credential leakage.",
+      "wave": "wave-4",
+      "type": "fix",
+      "depends_on": [
+        { "id": "ai-analyzer", "type": "hard" }
+      ],
+      "priority": 1,
+      "status": "completed",
+      "autonomy": "T2",
+      "estimated_tests": null,
+      "actual_tests": null,
+      "build_resets": 0,
+      "build_started": null,
+      "quality_score": null,
+      "post_mvp_status": null,
+      "signal_id": "AUDIT-V0.3.0",
+      "requested_by": "Security Agent",
+      "rework_of": "ai-analyzer"
+    },
+    {
+      "id": "audit-url-validation",
+      "name": "URL validation and git timeouts",
+      "intent": "Validate GitHub URLs before cloning. Add HTTP and git clone timeouts to prevent hanging on bad URLs or unreachable hosts.",
+      "wave": "wave-4",
+      "type": "fix",
+      "depends_on": [
+        { "id": "github-url-clone", "type": "hard" }
+      ],
+      "priority": 1,
+      "status": "completed",
+      "autonomy": "T2",
+      "estimated_tests": null,
+      "actual_tests": null,
+      "build_resets": 0,
+      "build_started": null,
+      "quality_score": null,
+      "post_mvp_status": null,
+      "signal_id": "AUDIT-V0.3.0",
+      "requested_by": "Security Agent",
+      "rework_of": "github-url-clone"
+    },
+    {
+      "id": "audit-jdbc-defaults",
+      "name": "JDBC default port inference",
+      "intent": "When JDBC connection strings omit port, infer default ports (PostgreSQL 5432, MySQL 3306, etc.). Many real-world Spring configs rely on default ports.",
+      "wave": "wave-4",
+      "type": "fix",
+      "depends_on": [
+        { "id": "parser-spring", "type": "hard" }
+      ],
+      "priority": 2,
+      "status": "completed",
+      "autonomy": "T1",
+      "estimated_tests": null,
+      "actual_tests": null,
+      "build_resets": 0,
+      "build_started": null,
+      "quality_score": null,
+      "post_mvp_status": null,
+      "signal_id": "AUDIT-V0.3.0",
+      "requested_by": "QA Agent",
+      "rework_of": "parser-spring"
+    },
+    {
+      "id": "audit-spring-multidoc",
+      "name": "Spring multi-document YAML support",
+      "intent": "Handle Spring YAML files with multiple documents separated by '---' (profile-based configs). Parse all documents, not just the first.",
+      "wave": "wave-4",
+      "type": "fix",
+      "depends_on": [
+        { "id": "parser-spring", "type": "hard" }
+      ],
+      "priority": 2,
+      "status": "completed",
+      "autonomy": "T1",
+      "estimated_tests": null,
+      "actual_tests": null,
+      "build_resets": 0,
+      "build_started": null,
+      "quality_score": null,
+      "post_mvp_status": null,
+      "signal_id": "AUDIT-V0.3.0",
+      "requested_by": "QA Agent",
+      "rework_of": "parser-spring"
+    },
+    {
+      "id": "audit-spring-boot3-redis",
+      "name": "Spring Boot 3.x Redis config key support",
+      "intent": "Support Spring Boot 3.x redis configuration under spring.data.redis (in addition to the legacy spring.redis key).",
+      "wave": "wave-4",
+      "type": "fix",
+      "depends_on": [
+        { "id": "parser-spring", "type": "hard" }
+      ],
+      "priority": 2,
+      "status": "completed",
+      "autonomy": "T1",
+      "estimated_tests": null,
+      "actual_tests": null,
+      "build_resets": 0,
+      "build_started": null,
+      "quality_score": null,
+      "post_mvp_status": null,
+      "signal_id": "AUDIT-V0.3.0",
+      "requested_by": "QA Agent",
+      "rework_of": "parser-spring"
+    },
+    {
+      "id": "audit-walker-warnings",
+      "name": "Walker warning return type",
+      "intent": "Change walker.Walk() to return WalkWarning structs alongside dependencies, so the analyze command can display non-fatal warnings (unparseable files, permission errors) to the user.",
+      "wave": "wave-4",
+      "type": "fix",
+      "depends_on": [
+        { "id": "parser-registry", "type": "hard" }
+      ],
+      "priority": 2,
+      "status": "completed",
+      "autonomy": "T1",
+      "estimated_tests": null,
+      "actual_tests": null,
+      "build_resets": 0,
+      "build_started": null,
+      "quality_score": null,
+      "post_mvp_status": null,
+      "signal_id": "AUDIT-V0.3.0",
+      "requested_by": "Architecture Agent",
+      "rework_of": "parser-registry"
     }
   ],
   "tech_debt": []

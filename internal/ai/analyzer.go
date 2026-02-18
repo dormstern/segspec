@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/dormorgenstern/segspec/internal/model"
+	"github.com/dormstern/segspec/internal/model"
 )
 
 const (

@@ -3,7 +3,7 @@ package tui
 import (
 	"testing"
 
-	"github.com/dormorgenstern/segspec/internal/model"
+	"github.com/dormstern/segspec/internal/model"
 )
 
 func TestNewPicker(t *testing.T) {

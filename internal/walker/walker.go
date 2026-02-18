@@ -4,8 +4,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/dormorgenstern/segspec/internal/model"
-	"github.com/dormorgenstern/segspec/internal/parser"
+	"github.com/dormstern/segspec/internal/model"
+	"github.com/dormstern/segspec/internal/parser"
 )
 
 // skippedDirs are directories we never descend into.

@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/dormorgenstern/segspec/internal/model"
+	"github.com/dormstern/segspec/internal/model"
 )
 
 func TestSummaryBasic(t *testing.T) {

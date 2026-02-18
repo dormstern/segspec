@@ -1,4 +1,4 @@
-module github.com/dormorgenstern/segspec
+module github.com/dormstern/segspec
 
 go 1.25.0
 

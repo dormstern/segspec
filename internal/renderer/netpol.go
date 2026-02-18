@@ -6,7 +6,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/dormorgenstern/segspec/internal/model"
+	"github.com/dormstern/segspec/internal/model"
 )
 
 // NetworkPolicy renders Kubernetes NetworkPolicy YAML from dependencies.

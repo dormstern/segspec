@@ -3,7 +3,7 @@ package parser
 import (
 	"testing"
 
-	"github.com/dormorgenstern/segspec/internal/model"
+	"github.com/dormstern/segspec/internal/model"
 )
 
 func TestPomXMLMultipleDependencies(t *testing.T) {
