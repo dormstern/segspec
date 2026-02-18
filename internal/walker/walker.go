@@ -25,6 +25,27 @@ type WalkWarning struct {
 	Err  error
 }
 
+// detectHelmCharts finds directories containing Chart.yaml under root.
+func detectHelmCharts(root string) []string {
+	var charts []string
+	filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() {
+			if skippedDirs[d.Name()] {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if d.Name() == "Chart.yaml" {
+			charts = append(charts, filepath.Dir(path))
+		}
+		return nil
+	})
+	return charts
+}
+
 // Walk recursively scans root for files matching registered parsers,
 // collects all discovered network dependencies, and returns them as a DependencySet.
 // Per-file parse failures are returned as warnings (not fatal errors).

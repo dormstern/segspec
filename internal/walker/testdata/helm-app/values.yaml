@@ -1,0 +1,6 @@
+image:
+  repository: myapp
+  tag: latest
+redis:
+  host: redis-cache
+  port: 6379

@@ -161,6 +161,24 @@ func TestWalkReturnsWarningsForParseErrors(t *testing.T) {
 	}
 }
 
+func TestDetectHelmCharts(t *testing.T) {
+	charts := detectHelmCharts("testdata/helm-app")
+	if len(charts) != 1 {
+		t.Fatalf("got %d charts, want 1", len(charts))
+	}
+	if charts[0] != "testdata/helm-app" {
+		t.Errorf("chart path = %q, want %q", charts[0], "testdata/helm-app")
+	}
+}
+
+func TestDetectHelmChartsNone(t *testing.T) {
+	dir := t.TempDir()
+	charts := detectHelmCharts(dir)
+	if len(charts) != 0 {
+		t.Fatalf("got %d charts, want 0", len(charts))
+	}
+}
+
 func TestWalkNoWarningsWhenAllFilesParse(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "app.yml"), []byte("test"), 0644)
