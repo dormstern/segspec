@@ -6,6 +6,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/dormorgenstern/segspec/internal/ai"
 	"github.com/dormorgenstern/segspec/internal/parser"
 	"github.com/dormorgenstern/segspec/internal/renderer"
 	"github.com/dormorgenstern/segspec/internal/walker"
@@ -52,6 +53,18 @@ func runAnalyze(cmd *cobra.Command, args []string) error {
 	ds, err := walker.Walk(path, registry)
 	if err != nil {
 		return fmt.Errorf("analysis failed: %w", err)
+	}
+
+	if aiEnabled {
+		aiDeps, aiErr := ai.Analyze(path, ds.Dependencies())
+		if aiErr != nil {
+			// If API key is missing, warn and continue with rule-based results.
+			fmt.Fprintf(os.Stderr, "Warning: AI analysis skipped: %v\n", aiErr)
+		} else {
+			for _, dep := range aiDeps {
+				ds.Add(dep)
+			}
+		}
 	}
 
 	if ds.Len() == 0 {
