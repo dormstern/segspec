@@ -3,6 +3,7 @@ package ai
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -22,15 +23,127 @@ func (m *mockHTTPClient) Do(req *http.Request) (*http.Response, error) {
 	return m.DoFunc(req)
 }
 
-func TestAnalyzeMissingAPIKey(t *testing.T) {
-	t.Setenv("ANTHROPIC_API_KEY", "")
-
-	_, err := Analyze(t.TempDir(), nil)
-	if err == nil {
-		t.Fatal("expected error for missing API key")
+// ollamaMockWithTags creates a mock that responds to both /api/tags and /api/generate.
+func ollamaMockWithTags(generateResponse string) *mockHTTPClient {
+	return &mockHTTPClient{
+		DoFunc: func(req *http.Request) (*http.Response, error) {
+			if strings.HasSuffix(req.URL.Path, "/api/tags") {
+				tagsResp := ollamaTagsResponse{
+					Models: []ollamaModelEntry{{Name: "nuextract:latest"}},
+				}
+				body, _ := json.Marshal(tagsResp)
+				return &http.Response{
+					StatusCode: 200,
+					Body:       io.NopCloser(bytes.NewReader(body)),
+				}, nil
+			}
+			// /api/generate
+			resp := ollamaGenerateResponse{Response: generateResponse}
+			body, _ := json.Marshal(resp)
+			return &http.Response{
+				StatusCode: 200,
+				Body:       io.NopCloser(bytes.NewReader(body)),
+			}, nil
+		},
 	}
-	if !strings.Contains(err.Error(), "ANTHROPIC_API_KEY") {
-		t.Errorf("error should mention ANTHROPIC_API_KEY, got: %v", err)
+}
+
+func TestAnalyzeOllamaNotReachable(t *testing.T) {
+	mock := &mockHTTPClient{
+		DoFunc: func(req *http.Request) (*http.Response, error) {
+			return nil, fmt.Errorf("connection refused")
+		},
+	}
+
+	origClient := httpClient
+	httpClient = mock
+	defer func() { httpClient = origClient }()
+
+	_, err := Analyze(t.TempDir(), nil, "local")
+	if err == nil {
+		t.Fatal("expected error when Ollama is not reachable")
+	}
+	if !strings.Contains(err.Error(), "Ollama not reachable") {
+		t.Errorf("error should mention Ollama not reachable, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "ollama pull nuextract") {
+		t.Errorf("error should mention 'ollama pull nuextract', got: %v", err)
+	}
+}
+
+func TestAnalyzeOllamaNoNuExtractModel(t *testing.T) {
+	mock := &mockHTTPClient{
+		DoFunc: func(req *http.Request) (*http.Response, error) {
+			tagsResp := ollamaTagsResponse{
+				Models: []ollamaModelEntry{{Name: "llama2:latest"}},
+			}
+			body, _ := json.Marshal(tagsResp)
+			return &http.Response{
+				StatusCode: 200,
+				Body:       io.NopCloser(bytes.NewReader(body)),
+			}, nil
+		},
+	}
+
+	origClient := httpClient
+	httpClient = mock
+	defer func() { httpClient = origClient }()
+
+	_, err := Analyze(t.TempDir(), nil, "local")
+	if err == nil {
+		t.Fatal("expected error when nuextract model is not available")
+	}
+	if !strings.Contains(err.Error(), "ollama pull nuextract") {
+		t.Errorf("error should mention 'ollama pull nuextract', got: %v", err)
+	}
+}
+
+func TestCheckOllamaSuccess(t *testing.T) {
+	mock := &mockHTTPClient{
+		DoFunc: func(req *http.Request) (*http.Response, error) {
+			tagsResp := ollamaTagsResponse{
+				Models: []ollamaModelEntry{
+					{Name: "llama2:latest"},
+					{Name: "nuextract:latest"},
+				},
+			}
+			body, _ := json.Marshal(tagsResp)
+			return &http.Response{
+				StatusCode: 200,
+				Body:       io.NopCloser(bytes.NewReader(body)),
+			}, nil
+		},
+	}
+
+	origClient := httpClient
+	httpClient = mock
+	defer func() { httpClient = origClient }()
+
+	if err := checkOllama(); err != nil {
+		t.Fatalf("checkOllama() should succeed, got: %v", err)
+	}
+}
+
+func TestCheckOllamaMatchesUntaggedModel(t *testing.T) {
+	mock := &mockHTTPClient{
+		DoFunc: func(req *http.Request) (*http.Response, error) {
+			tagsResp := ollamaTagsResponse{
+				Models: []ollamaModelEntry{{Name: "nuextract"}},
+			}
+			body, _ := json.Marshal(tagsResp)
+			return &http.Response{
+				StatusCode: 200,
+				Body:       io.NopCloser(bytes.NewReader(body)),
+			}, nil
+		},
+	}
+
+	origClient := httpClient
+	httpClient = mock
+	defer func() { httpClient = origClient }()
+
+	if err := checkOllama(); err != nil {
+		t.Fatalf("checkOllama() should match 'nuextract' (no tag), got: %v", err)
 	}
 }
 
@@ -151,46 +264,35 @@ func TestCollectFilesSkipsSkippedDirs(t *testing.T) {
 	}
 }
 
-func TestBuildPromptIncludesExistingDeps(t *testing.T) {
-	files := []fileEntry{
-		{Path: "app.yml", Content: "db.host: postgres"},
-	}
-	existing := []model.NetworkDependency{
-		{Target: "postgres", Port: 5432, Protocol: "TCP", Description: "PostgreSQL from Spring config"},
-	}
+func TestBuildPromptFormat(t *testing.T) {
+	f := fileEntry{Path: "app.yml", Content: "db.host: postgres\ndb.port: 5432"}
 
-	prompt := buildPrompt(files, existing)
+	prompt := buildNuExtractPrompt(f)
 
-	if !strings.Contains(prompt, "postgres:5432/TCP") {
-		t.Error("prompt should list existing dependency")
+	if !strings.Contains(prompt, "<|input|>") {
+		t.Error("prompt should contain <|input|> tag")
 	}
-	if !strings.Contains(prompt, "--- app.yml ---") {
-		t.Error("prompt should include file content header")
+	if !strings.Contains(prompt, "<|output|>") {
+		t.Error("prompt should contain <|output|> tag")
 	}
 	if !strings.Contains(prompt, "db.host: postgres") {
 		t.Error("prompt should include file content")
 	}
-}
-
-func TestBuildPromptHandlesNoDeps(t *testing.T) {
-	files := []fileEntry{
-		{Path: "app.yml", Content: "key: value"},
+	if !strings.Contains(prompt, `"host"`) {
+		t.Error("prompt should include the JSON template with host field")
 	}
-
-	prompt := buildPrompt(files, nil)
-
-	if !strings.Contains(prompt, "(none found yet)") {
-		t.Error("prompt should indicate no existing deps")
+	if !strings.Contains(prompt, `"service_type"`) {
+		t.Error("prompt should include the JSON template with service_type field")
 	}
 }
 
 func TestParseResponseValidJSON(t *testing.T) {
 	response := `[
-		{"target": "postgres-db", "port": 5432, "protocol": "TCP", "description": "PostgreSQL connection in application.yml"},
-		{"target": "redis-cache", "port": 6379, "protocol": "TCP", "description": "Redis connection in .env"}
+		{"host": "postgres-db", "port": 5432, "protocol": "TCP", "service_type": "database", "description": "PostgreSQL connection"},
+		{"host": "redis-cache", "port": 6379, "protocol": "TCP", "service_type": "cache", "description": "Redis connection"}
 	]`
 
-	deps, err := parseResponse(response, "/app/my-service")
+	deps, err := parseResponse(response, "my-service")
 	if err != nil {
 		t.Fatalf("parseResponse() error: %v", err)
 	}
@@ -224,9 +326,9 @@ func TestParseResponseValidJSON(t *testing.T) {
 }
 
 func TestParseResponseMarkdownFenced(t *testing.T) {
-	response := "```json\n[{\"target\": \"mongo\", \"port\": 27017, \"protocol\": \"TCP\", \"description\": \"MongoDB\"}]\n```"
+	response := "```json\n[{\"host\": \"mongo\", \"port\": 27017, \"protocol\": \"TCP\", \"service_type\": \"database\", \"description\": \"MongoDB\"}]\n```"
 
-	deps, err := parseResponse(response, "/app/svc")
+	deps, err := parseResponse(response, "svc")
 	if err != nil {
 		t.Fatalf("parseResponse() error: %v", err)
 	}
@@ -240,7 +342,7 @@ func TestParseResponseMarkdownFenced(t *testing.T) {
 }
 
 func TestParseResponseEmptyArray(t *testing.T) {
-	deps, err := parseResponse("[]", "/app/svc")
+	deps, err := parseResponse("[]", "svc")
 	if err != nil {
 		t.Fatalf("parseResponse() error: %v", err)
 	}
@@ -250,16 +352,16 @@ func TestParseResponseEmptyArray(t *testing.T) {
 }
 
 func TestParseResponseInvalidJSON(t *testing.T) {
-	_, err := parseResponse("this is not json", "/app/svc")
+	_, err := parseResponse("this is not json", "svc")
 	if err == nil {
 		t.Fatal("expected error for invalid JSON")
 	}
 }
 
 func TestParseResponseDefaultProtocol(t *testing.T) {
-	response := `[{"target": "api-server", "port": 8080, "protocol": "", "description": "API endpoint"}]`
+	response := `[{"host": "api-server", "port": 8080, "protocol": "", "service_type": "api", "description": "API endpoint"}]`
 
-	deps, err := parseResponse(response, "/app/svc")
+	deps, err := parseResponse(response, "svc")
 	if err != nil {
 		t.Fatalf("parseResponse() error: %v", err)
 	}
@@ -270,9 +372,9 @@ func TestParseResponseDefaultProtocol(t *testing.T) {
 }
 
 func TestParseResponseAIPrefixNotDuplicated(t *testing.T) {
-	response := `[{"target": "db", "port": 5432, "protocol": "TCP", "description": "[AI] already prefixed"}]`
+	response := `[{"host": "db", "port": 5432, "protocol": "TCP", "service_type": "database", "description": "[AI] already prefixed"}]`
 
-	deps, err := parseResponse(response, "/app/svc")
+	deps, err := parseResponse(response, "svc")
 	if err != nil {
 		t.Fatalf("parseResponse() error: %v", err)
 	}
@@ -282,68 +384,50 @@ func TestParseResponseAIPrefixNotDuplicated(t *testing.T) {
 	}
 }
 
-func TestCallAPISendsCorrectHeaders(t *testing.T) {
+func TestParseResponseSkipsEmptyHost(t *testing.T) {
+	response := `[
+		{"host": "", "port": 0, "protocol": "", "service_type": "", "description": ""},
+		{"host": "real-host", "port": 5432, "protocol": "TCP", "service_type": "db", "description": "real dep"}
+	]`
+
+	deps, err := parseResponse(response, "svc")
+	if err != nil {
+		t.Fatalf("parseResponse() error: %v", err)
+	}
+
+	if len(deps) != 1 {
+		t.Fatalf("expected 1 dep (empty host skipped), got %d", len(deps))
+	}
+	if deps[0].Target != "real-host" {
+		t.Errorf("Target = %q, want real-host", deps[0].Target)
+	}
+}
+
+func TestParseResponseUsesServiceTypeAsFallbackDescription(t *testing.T) {
+	response := `[{"host": "db-host", "port": 5432, "protocol": "TCP", "service_type": "PostgreSQL", "description": ""}]`
+
+	deps, err := parseResponse(response, "svc")
+	if err != nil {
+		t.Fatalf("parseResponse() error: %v", err)
+	}
+
+	if deps[0].Description != "[AI] PostgreSQL" {
+		t.Errorf("Description = %q, want '[AI] PostgreSQL'", deps[0].Description)
+	}
+}
+
+func TestCallOllamaSendsCorrectRequest(t *testing.T) {
 	var capturedReq *http.Request
+	var capturedBody ollamaGenerateRequest
 
 	mock := &mockHTTPClient{
 		DoFunc: func(req *http.Request) (*http.Response, error) {
 			capturedReq = req
-
-			resp := apiResponse{
-				Content: []apiContent{
-					{Type: "text", Text: "[]"},
-				},
-			}
-			body, _ := json.Marshal(resp)
-
-			return &http.Response{
-				StatusCode: 200,
-				Body:       io.NopCloser(bytes.NewReader(body)),
-			}, nil
-		},
-	}
-
-	origClient := httpClient
-	httpClient = mock
-	defer func() { httpClient = origClient }()
-
-	_, err := callAPI("test-key-123", "test prompt")
-	if err != nil {
-		t.Fatalf("callAPI() error: %v", err)
-	}
-
-	if capturedReq.Header.Get("x-api-key") != "test-key-123" {
-		t.Errorf("x-api-key = %q, want test-key-123", capturedReq.Header.Get("x-api-key"))
-	}
-	if capturedReq.Header.Get("anthropic-version") != "2023-06-01" {
-		t.Errorf("anthropic-version = %q, want 2023-06-01", capturedReq.Header.Get("anthropic-version"))
-	}
-	if capturedReq.Header.Get("Content-Type") != "application/json" {
-		t.Errorf("Content-Type = %q, want application/json", capturedReq.Header.Get("Content-Type"))
-	}
-	if capturedReq.URL.String() != apiURL {
-		t.Errorf("URL = %q, want %q", capturedReq.URL.String(), apiURL)
-	}
-	if capturedReq.Method != "POST" {
-		t.Errorf("Method = %q, want POST", capturedReq.Method)
-	}
-}
-
-func TestCallAPISendsCorrectBody(t *testing.T) {
-	var capturedBody apiRequest
-
-	mock := &mockHTTPClient{
-		DoFunc: func(req *http.Request) (*http.Response, error) {
 			body, _ := io.ReadAll(req.Body)
 			json.Unmarshal(body, &capturedBody)
 
-			resp := apiResponse{
-				Content: []apiContent{
-					{Type: "text", Text: "[]"},
-				},
-			}
+			resp := ollamaGenerateResponse{Response: "[]"}
 			respBody, _ := json.Marshal(resp)
-
 			return &http.Response{
 				StatusCode: 200,
 				Body:       io.NopCloser(bytes.NewReader(respBody)),
@@ -355,34 +439,37 @@ func TestCallAPISendsCorrectBody(t *testing.T) {
 	httpClient = mock
 	defer func() { httpClient = origClient }()
 
-	_, err := callAPI("key", "my prompt")
+	_, err := callOllama("test prompt")
 	if err != nil {
-		t.Fatalf("callAPI() error: %v", err)
+		t.Fatalf("callOllama() error: %v", err)
 	}
 
-	if capturedBody.Model != apiModel {
-		t.Errorf("model = %q, want %q", capturedBody.Model, apiModel)
+	if capturedReq.Method != "POST" {
+		t.Errorf("Method = %q, want POST", capturedReq.Method)
 	}
-	if capturedBody.MaxTokens != maxTokens {
-		t.Errorf("max_tokens = %d, want %d", capturedBody.MaxTokens, maxTokens)
+	if capturedReq.URL.String() != ollamaGenURL {
+		t.Errorf("URL = %q, want %q", capturedReq.URL.String(), ollamaGenURL)
 	}
-	if len(capturedBody.Messages) != 1 {
-		t.Fatalf("expected 1 message, got %d", len(capturedBody.Messages))
+	if capturedReq.Header.Get("Content-Type") != "application/json" {
+		t.Errorf("Content-Type = %q, want application/json", capturedReq.Header.Get("Content-Type"))
 	}
-	if capturedBody.Messages[0].Role != "user" {
-		t.Errorf("role = %q, want user", capturedBody.Messages[0].Role)
+	if capturedBody.Model != ollamaModel {
+		t.Errorf("model = %q, want %q", capturedBody.Model, ollamaModel)
 	}
-	if capturedBody.Messages[0].Content != "my prompt" {
-		t.Errorf("content = %q, want 'my prompt'", capturedBody.Messages[0].Content)
+	if capturedBody.Prompt != "test prompt" {
+		t.Errorf("prompt = %q, want 'test prompt'", capturedBody.Prompt)
+	}
+	if capturedBody.Stream != false {
+		t.Errorf("stream = %v, want false", capturedBody.Stream)
 	}
 }
 
-func TestCallAPIHandlesErrorStatus(t *testing.T) {
+func TestCallOllamaHandlesErrorStatus(t *testing.T) {
 	mock := &mockHTTPClient{
 		DoFunc: func(req *http.Request) (*http.Response, error) {
 			return &http.Response{
-				StatusCode: 401,
-				Body:       io.NopCloser(bytes.NewReader([]byte(`{"error": "unauthorized"}`))),
+				StatusCode: 500,
+				Body:       io.NopCloser(bytes.NewReader([]byte(`{"error": "internal error"}`))),
 			}, nil
 		},
 	}
@@ -391,19 +478,19 @@ func TestCallAPIHandlesErrorStatus(t *testing.T) {
 	httpClient = mock
 	defer func() { httpClient = origClient }()
 
-	_, err := callAPI("bad-key", "prompt")
+	_, err := callOllama("prompt")
 	if err == nil {
-		t.Fatal("expected error for 401 status")
+		t.Fatal("expected error for 500 status")
 	}
-	if !strings.Contains(err.Error(), "401") {
+	if !strings.Contains(err.Error(), "500") {
 		t.Errorf("error should mention status code, got: %v", err)
 	}
 }
 
-func TestCallAPIHandlesEmptyResponse(t *testing.T) {
+func TestCallOllamaHandlesEmptyResponse(t *testing.T) {
 	mock := &mockHTTPClient{
 		DoFunc: func(req *http.Request) (*http.Response, error) {
-			resp := apiResponse{Content: []apiContent{}}
+			resp := ollamaGenerateResponse{Response: ""}
 			body, _ := json.Marshal(resp)
 			return &http.Response{
 				StatusCode: 200,
@@ -416,7 +503,7 @@ func TestCallAPIHandlesEmptyResponse(t *testing.T) {
 	httpClient = mock
 	defer func() { httpClient = origClient }()
 
-	_, err := callAPI("key", "prompt")
+	_, err := callOllama("prompt")
 	if err == nil {
 		t.Fatal("expected error for empty response")
 	}
@@ -426,37 +513,22 @@ func TestCallAPIHandlesEmptyResponse(t *testing.T) {
 }
 
 func TestAnalyzeEndToEndWithMock(t *testing.T) {
-	t.Setenv("ANTHROPIC_API_KEY", "test-key")
-
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "application.yml"), []byte("spring.redis.host: my-redis\nspring.redis.port: 6379"), 0644)
 
-	aiJSON := `[{"target": "my-redis", "port": 6379, "protocol": "TCP", "description": "Redis connection in application.yml"}]`
+	aiJSON := `[{"host": "my-redis", "port": 6379, "protocol": "TCP", "service_type": "cache", "description": "Redis connection in application.yml"}]`
 
-	mock := &mockHTTPClient{
-		DoFunc: func(req *http.Request) (*http.Response, error) {
-			resp := apiResponse{
-				Content: []apiContent{
-					{Type: "text", Text: aiJSON},
-				},
-			}
-			body, _ := json.Marshal(resp)
-			return &http.Response{
-				StatusCode: 200,
-				Body:       io.NopCloser(bytes.NewReader(body)),
-			}, nil
-		},
-	}
+	mock := ollamaMockWithTags(aiJSON)
 
 	origClient := httpClient
 	httpClient = mock
 	defer func() { httpClient = origClient }()
 
 	existing := []model.NetworkDependency{
-		{Target: "postgres", Port: 5432, Protocol: "TCP", Description: "PostgreSQL"},
+		{Source: "test", Target: "postgres", Port: 5432, Protocol: "TCP", Description: "PostgreSQL"},
 	}
 
-	deps, err := Analyze(dir, existing)
+	deps, err := Analyze(dir, existing, "local")
 	if err != nil {
 		t.Fatalf("Analyze() error: %v", err)
 	}
@@ -475,17 +547,100 @@ func TestAnalyzeEndToEndWithMock(t *testing.T) {
 	}
 }
 
+func TestAnalyzeDeduplicatesAgainstExisting(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "app.yml"), []byte("db: postgres:5432"), 0644)
+
+	// NuExtract returns a dep that matches an existing one.
+	aiJSON := `[{"host": "postgres", "port": 5432, "protocol": "TCP", "service_type": "database", "description": "PostgreSQL"}]`
+
+	mock := ollamaMockWithTags(aiJSON)
+
+	origClient := httpClient
+	httpClient = mock
+	defer func() { httpClient = origClient }()
+
+	serviceName := filepath.Base(dir)
+	existing := []model.NetworkDependency{
+		{Source: serviceName, Target: "postgres", Port: 5432, Protocol: "TCP", Description: "PostgreSQL"},
+	}
+
+	deps, err := Analyze(dir, existing, "local")
+	if err != nil {
+		t.Fatalf("Analyze() error: %v", err)
+	}
+
+	if len(deps) != 0 {
+		t.Errorf("expected 0 deps (deduplicated), got %d", len(deps))
+	}
+}
+
 func TestAnalyzeEmptyDir(t *testing.T) {
-	t.Setenv("ANTHROPIC_API_KEY", "test-key")
+	mock := ollamaMockWithTags("[]")
+
+	origClient := httpClient
+	httpClient = mock
+	defer func() { httpClient = origClient }()
 
 	dir := t.TempDir()
 
-	deps, err := Analyze(dir, nil)
+	deps, err := Analyze(dir, nil, "local")
 	if err != nil {
 		t.Fatalf("Analyze() error: %v", err)
 	}
 	if deps != nil {
 		t.Errorf("expected nil deps for empty dir, got %d", len(deps))
+	}
+}
+
+func TestAnalyzeMultipleFiles(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "db.yml"), []byte("host: postgres\nport: 5432"), 0644)
+	os.WriteFile(filepath.Join(dir, "cache.yml"), []byte("redis.host: my-redis\nredis.port: 6379"), 0644)
+
+	callCount := 0
+	mock := &mockHTTPClient{
+		DoFunc: func(req *http.Request) (*http.Response, error) {
+			if strings.HasSuffix(req.URL.Path, "/api/tags") {
+				tagsResp := ollamaTagsResponse{
+					Models: []ollamaModelEntry{{Name: "nuextract:latest"}},
+				}
+				body, _ := json.Marshal(tagsResp)
+				return &http.Response{
+					StatusCode: 200,
+					Body:       io.NopCloser(bytes.NewReader(body)),
+				}, nil
+			}
+
+			// Return different results for each file.
+			callCount++
+			var aiJSON string
+			if callCount == 1 {
+				aiJSON = `[{"host": "postgres", "port": 5432, "protocol": "TCP", "service_type": "database", "description": "PostgreSQL"}]`
+			} else {
+				aiJSON = `[{"host": "my-redis", "port": 6379, "protocol": "TCP", "service_type": "cache", "description": "Redis"}]`
+			}
+
+			resp := ollamaGenerateResponse{Response: aiJSON}
+			body, _ := json.Marshal(resp)
+			return &http.Response{
+				StatusCode: 200,
+				Body:       io.NopCloser(bytes.NewReader(body)),
+			}, nil
+		},
+	}
+
+	origClient := httpClient
+	httpClient = mock
+	defer func() { httpClient = origClient }()
+
+	deps, err := Analyze(dir, nil, "local")
+	if err != nil {
+		t.Fatalf("Analyze() error: %v", err)
+	}
+
+	if len(deps) != 2 {
+		t.Fatalf("expected 2 deps from 2 files, got %d", len(deps))
 	}
 }
 
@@ -537,5 +692,302 @@ func TestTruncate(t *testing.T) {
 	}
 	if got := truncate("this is a long string", 10); got != "this is a ..." {
 		t.Errorf("truncate long = %q, want 'this is a ...'", got)
+	}
+}
+
+func TestResolveProviderLocal(t *testing.T) {
+	mock := &mockHTTPClient{
+		DoFunc: func(req *http.Request) (*http.Response, error) {
+			tagsResp := ollamaTagsResponse{
+				Models: []ollamaModelEntry{{Name: "nuextract:latest"}},
+			}
+			body, _ := json.Marshal(tagsResp)
+			return &http.Response{
+				StatusCode: 200,
+				Body:       io.NopCloser(bytes.NewReader(body)),
+			}, nil
+		},
+	}
+	origClient := httpClient
+	httpClient = mock
+	defer func() { httpClient = origClient }()
+
+	p, err := resolveProvider("local")
+	if err != nil {
+		t.Fatalf("resolveProvider(local) error: %v", err)
+	}
+	if p != "local" {
+		t.Errorf("expected 'local', got %q", p)
+	}
+}
+
+func TestResolveProviderCloudNoKey(t *testing.T) {
+	origKey := os.Getenv("GEMINI_API_KEY")
+	os.Unsetenv("GEMINI_API_KEY")
+	defer func() {
+		if origKey != "" {
+			os.Setenv("GEMINI_API_KEY", origKey)
+		}
+	}()
+
+	_, err := resolveProvider("cloud")
+	if err == nil {
+		t.Fatal("expected error when GEMINI_API_KEY not set")
+	}
+	if !strings.Contains(err.Error(), "GEMINI_API_KEY") {
+		t.Errorf("error should mention GEMINI_API_KEY, got: %v", err)
+	}
+}
+
+func TestResolveProviderCloudWithKey(t *testing.T) {
+	origKey := os.Getenv("GEMINI_API_KEY")
+	os.Setenv("GEMINI_API_KEY", "test-key")
+	defer func() {
+		if origKey != "" {
+			os.Setenv("GEMINI_API_KEY", origKey)
+		} else {
+			os.Unsetenv("GEMINI_API_KEY")
+		}
+	}()
+
+	p, err := resolveProvider("cloud")
+	if err != nil {
+		t.Fatalf("resolveProvider(cloud) error: %v", err)
+	}
+	if p != "cloud" {
+		t.Errorf("expected 'cloud', got %q", p)
+	}
+}
+
+func TestResolveProviderAutoFallsBackToCloud(t *testing.T) {
+	// Ollama unreachable, but Gemini key set.
+	mock := &mockHTTPClient{
+		DoFunc: func(req *http.Request) (*http.Response, error) {
+			return nil, fmt.Errorf("connection refused")
+		},
+	}
+	origClient := httpClient
+	httpClient = mock
+	defer func() { httpClient = origClient }()
+
+	origKey := os.Getenv("GEMINI_API_KEY")
+	os.Setenv("GEMINI_API_KEY", "test-key")
+	defer func() {
+		if origKey != "" {
+			os.Setenv("GEMINI_API_KEY", origKey)
+		} else {
+			os.Unsetenv("GEMINI_API_KEY")
+		}
+	}()
+
+	p, err := resolveProvider("auto")
+	if err != nil {
+		t.Fatalf("resolveProvider(auto) error: %v", err)
+	}
+	if p != "cloud" {
+		t.Errorf("expected 'cloud' (fallback), got %q", p)
+	}
+}
+
+func TestResolveProviderAutoNeitherAvailable(t *testing.T) {
+	mock := &mockHTTPClient{
+		DoFunc: func(req *http.Request) (*http.Response, error) {
+			return nil, fmt.Errorf("connection refused")
+		},
+	}
+	origClient := httpClient
+	httpClient = mock
+	defer func() { httpClient = origClient }()
+
+	origKey := os.Getenv("GEMINI_API_KEY")
+	os.Unsetenv("GEMINI_API_KEY")
+	defer func() {
+		if origKey != "" {
+			os.Setenv("GEMINI_API_KEY", origKey)
+		}
+	}()
+
+	_, err := resolveProvider("auto")
+	if err == nil {
+		t.Fatal("expected error when neither backend available")
+	}
+	if !strings.Contains(err.Error(), "no AI backend available") {
+		t.Errorf("error should mention 'no AI backend available', got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "ollama pull nuextract") {
+		t.Errorf("error should mention ollama install, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "GEMINI_API_KEY") {
+		t.Errorf("error should mention GEMINI_API_KEY, got: %v", err)
+	}
+}
+
+func TestResolveProviderUnknown(t *testing.T) {
+	_, err := resolveProvider("potato")
+	if err == nil {
+		t.Fatal("expected error for unknown provider")
+	}
+	if !strings.Contains(err.Error(), "unknown AI provider") {
+		t.Errorf("error should mention unknown provider, got: %v", err)
+	}
+}
+
+func TestBuildGeminiPrompt(t *testing.T) {
+	files := []fileEntry{
+		{Path: "app.yml", Content: "db.host: postgres"},
+		{Path: ".env", Content: "REDIS_URL=redis://cache:6379"},
+	}
+
+	prompt := buildGeminiPrompt(files)
+
+	if !strings.Contains(prompt, "network dependencies") {
+		t.Error("prompt should mention network dependencies")
+	}
+	if !strings.Contains(prompt, "--- file: app.yml ---") {
+		t.Error("prompt should include file header")
+	}
+	if !strings.Contains(prompt, "db.host: postgres") {
+		t.Error("prompt should include file content")
+	}
+	if !strings.Contains(prompt, "--- file: .env ---") {
+		t.Error("prompt should include second file header")
+	}
+}
+
+func TestCallGeminiSuccess(t *testing.T) {
+	aiJSON := `[{"host": "postgres", "port": 5432, "protocol": "TCP", "service_type": "database", "description": "PostgreSQL"}]`
+
+	mock := &mockHTTPClient{
+		DoFunc: func(req *http.Request) (*http.Response, error) {
+			resp := geminiResponse{
+				Candidates: []struct {
+					Content struct {
+						Parts []geminiPart `json:"parts"`
+					} `json:"content"`
+				}{
+					{Content: struct {
+						Parts []geminiPart `json:"parts"`
+					}{Parts: []geminiPart{{Text: aiJSON}}}},
+				},
+			}
+			body, _ := json.Marshal(resp)
+			return &http.Response{
+				StatusCode: 200,
+				Body:       io.NopCloser(bytes.NewReader(body)),
+			}, nil
+		},
+	}
+
+	origClient := httpClient
+	httpClient = mock
+	defer func() { httpClient = origClient }()
+
+	text, err := callGemini("test-key", "test prompt")
+	if err != nil {
+		t.Fatalf("callGemini() error: %v", err)
+	}
+	if text != aiJSON {
+		t.Errorf("expected %q, got %q", aiJSON, text)
+	}
+}
+
+func TestCallGeminiErrorStatus(t *testing.T) {
+	mock := &mockHTTPClient{
+		DoFunc: func(req *http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: 403,
+				Body:       io.NopCloser(bytes.NewReader([]byte(`{"error": "forbidden"}`))),
+			}, nil
+		},
+	}
+
+	origClient := httpClient
+	httpClient = mock
+	defer func() { httpClient = origClient }()
+
+	_, err := callGemini("bad-key", "prompt")
+	if err == nil {
+		t.Fatal("expected error for 403")
+	}
+	if !strings.Contains(err.Error(), "403") {
+		t.Errorf("error should mention 403, got: %v", err)
+	}
+}
+
+func TestCallGeminiEmptyResponse(t *testing.T) {
+	mock := &mockHTTPClient{
+		DoFunc: func(req *http.Request) (*http.Response, error) {
+			resp := geminiResponse{}
+			body, _ := json.Marshal(resp)
+			return &http.Response{
+				StatusCode: 200,
+				Body:       io.NopCloser(bytes.NewReader(body)),
+			}, nil
+		},
+	}
+
+	origClient := httpClient
+	httpClient = mock
+	defer func() { httpClient = origClient }()
+
+	_, err := callGemini("key", "prompt")
+	if err == nil {
+		t.Fatal("expected error for empty response")
+	}
+	if !strings.Contains(err.Error(), "empty response") {
+		t.Errorf("error should mention empty response, got: %v", err)
+	}
+}
+
+func TestAnalyzeCloudEndToEnd(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "app.yml"), []byte("db.host: postgres\ndb.port: 5432"), 0644)
+
+	aiJSON := `[{"host": "postgres", "port": 5432, "protocol": "TCP", "service_type": "database", "description": "PostgreSQL"}]`
+
+	mock := &mockHTTPClient{
+		DoFunc: func(req *http.Request) (*http.Response, error) {
+			resp := geminiResponse{
+				Candidates: []struct {
+					Content struct {
+						Parts []geminiPart `json:"parts"`
+					} `json:"content"`
+				}{
+					{Content: struct {
+						Parts []geminiPart `json:"parts"`
+					}{Parts: []geminiPart{{Text: aiJSON}}}},
+				},
+			}
+			body, _ := json.Marshal(resp)
+			return &http.Response{
+				StatusCode: 200,
+				Body:       io.NopCloser(bytes.NewReader(body)),
+			}, nil
+		},
+	}
+
+	origClient := httpClient
+	httpClient = mock
+	defer func() { httpClient = origClient }()
+
+	origKey := os.Getenv("GEMINI_API_KEY")
+	os.Setenv("GEMINI_API_KEY", "test-key")
+	defer func() {
+		if origKey != "" {
+			os.Setenv("GEMINI_API_KEY", origKey)
+		} else {
+			os.Unsetenv("GEMINI_API_KEY")
+		}
+	}()
+
+	deps, err := Analyze(dir, nil, "cloud")
+	if err != nil {
+		t.Fatalf("Analyze(cloud) error: %v", err)
+	}
+	if len(deps) != 1 {
+		t.Fatalf("expected 1 dep, got %d", len(deps))
+	}
+	if deps[0].Target != "postgres" {
+		t.Errorf("Target = %q, want postgres", deps[0].Target)
 	}
 }

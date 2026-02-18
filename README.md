@@ -148,12 +148,40 @@ Or commit to your GitOps repo and let ArgoCD/Flux handle it.
 
 ## AI-Enhanced Analysis
 
-For deeper analysis, add the `--ai` flag. segspec sends config files to Claude to find dependencies the rule-based parsers might miss:
+Add `--ai` to find dependencies the rule-based parsers might miss. Pick your mode:
+
+### Option A: Local (fully offline, nothing leaves your machine)
 
 ```bash
-export ANTHROPIC_API_KEY=sk-ant-...
-segspec analyze ./your-app --format all --ai
+# One-time setup: install Ollama + the NuExtract extraction model
+curl -fsSL https://ollama.com/install.sh | sh
+ollama pull nuextract
+
+# Run with local AI
+segspec analyze ./your-app --ai local
 ```
+
+**Best for:** enterprise, air-gapped networks, sensitive codebases. NuExtract is a 3.8B model by NuMind (US/France) under MIT license, built on Microsoft's Phi-3. No data leaves your laptop.
+
+### Option B: Cloud (zero install, free tier)
+
+```bash
+# One-time: get a free API key at https://aistudio.google.com/apikey
+export GEMINI_API_KEY=your-key-here
+
+# Run with cloud AI
+segspec analyze ./your-app --ai cloud
+```
+
+**Best for:** quick evaluation, CI/CD pipelines, teams that don't want to manage local models. Uses Google's Gemini Flash (free tier: 1,000 requests/day).
+
+### Auto-detect
+
+```bash
+segspec analyze ./your-app --ai
+```
+
+Without `local` or `cloud`, segspec checks for Ollama first (privacy-first default), then falls back to Gemini if `GEMINI_API_KEY` is set.
 
 AI-discovered dependencies are marked with `[AI]` prefix and medium confidence so you know to verify them.
 

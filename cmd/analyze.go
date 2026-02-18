@@ -14,7 +14,7 @@ import (
 	"github.com/dormorgenstern/segspec/internal/walker"
 )
 
-var aiEnabled bool
+var aiProvider string
 
 var analyzeCmd = &cobra.Command{
 	Use:   "analyze <path>",
@@ -38,13 +38,17 @@ Supported file types:
   - Environment: .env files
   - Build: pom.xml, build.gradle (dependency inference)
 
-Use --ai to enable LLM-powered analysis for deeper dependency discovery.`,
+AI-powered analysis (--ai flag):
+  --ai         Auto-detect: tries local Ollama first, then Gemini cloud
+  --ai local   Fully offline analysis via Ollama + NuExtract (ollama pull nuextract)
+  --ai cloud   Cloud analysis via Gemini Flash (set GEMINI_API_KEY)`,
 	Args: cobra.ExactArgs(1),
 	RunE: runAnalyze,
 }
 
 func init() {
-	analyzeCmd.Flags().BoolVar(&aiEnabled, "ai", false, "Enable LLM-powered analysis (requires ANTHROPIC_API_KEY)")
+	analyzeCmd.Flags().StringVar(&aiProvider, "ai", "", "AI backend: 'local' (Ollama), 'cloud' (Gemini), or omit for auto-detect")
+	analyzeCmd.Flag("ai").NoOptDefVal = "auto"
 	rootCmd.AddCommand(analyzeCmd)
 }
 
@@ -112,10 +116,9 @@ func runAnalyze(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("analysis failed: %w", err)
 	}
 
-	if aiEnabled {
-		aiDeps, aiErr := ai.Analyze(path, ds.Dependencies())
+	if aiProvider != "" {
+		aiDeps, aiErr := ai.Analyze(path, ds.Dependencies(), aiProvider)
 		if aiErr != nil {
-			// If API key is missing, warn and continue with rule-based results.
 			fmt.Fprintf(os.Stderr, "Warning: AI analysis skipped: %v\n", aiErr)
 		} else {
 			for _, dep := range aiDeps {
