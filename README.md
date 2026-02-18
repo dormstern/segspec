@@ -66,4 +66,4 @@ kubectl apply -f ./networkpolicies
 
 ---
 
-⭐ **Star if you want microsegmentation without agents**
+⭐ **Star if you want security-as-config**
