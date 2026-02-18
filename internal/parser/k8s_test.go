@@ -1,0 +1,305 @@
+package parser
+
+import (
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/dormorgenstern/segspec/internal/model"
+)
+
+func writeTempFile(t *testing.T, name, content string) string {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, name)
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func TestK8sDeploymentWithPortsAndEnv(t *testing.T) {
+	manifest := `apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: order-service
+spec:
+  replicas: 2
+  template:
+    spec:
+      containers:
+      - name: order
+        image: order-service:latest
+        ports:
+        - containerPort: 8080
+        - containerPort: 9090
+        env:
+        - name: DATABASE_URL
+          value: "postgresql://db-primary.prod.svc.cluster.local:5432/orders"
+        - name: CACHE_HOST
+          value: "redis-master:6379"
+        - name: API_ENDPOINT
+          value: "http://payment-service:8080/api"
+        - name: CONFIG_REF
+          valueFrom:
+            configMapKeyRef:
+              name: order-config
+              key: app.properties
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: db-credentials
+              key: password
+`
+	path := writeTempFile(t, "deployment.yaml", manifest)
+	deps, err := parseK8s(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Expect:
+	// 2 container ports (8080, 9090)
+	// 1 URL dep (postgresql://...)
+	// 1 host:port dep (redis-master:6379)
+	// 1 URL dep (http://payment-service:8080/api)
+	// 1 configMapKeyRef (order-config)
+	// 1 secretKeyRef (db-credentials)
+	// Total: 7
+
+	assertDepCount(t, deps, 7)
+
+	assertHasDep(t, deps, func(d model.NetworkDependency) bool {
+		return d.Port == 8080 && d.Target == "order-service" && d.Confidence == model.High
+	}, "container port 8080")
+
+	assertHasDep(t, deps, func(d model.NetworkDependency) bool {
+		return d.Port == 9090 && d.Target == "order-service" && d.Confidence == model.High
+	}, "container port 9090")
+
+	assertHasDep(t, deps, func(d model.NetworkDependency) bool {
+		return d.Target == "db-primary.prod.svc.cluster.local" && d.Port == 5432 && d.Confidence == model.High
+	}, "postgresql URL dep")
+
+	assertHasDep(t, deps, func(d model.NetworkDependency) bool {
+		return d.Target == "redis-master" && d.Port == 6379 && d.Confidence == model.High
+	}, "redis host:port dep")
+
+	assertHasDep(t, deps, func(d model.NetworkDependency) bool {
+		return d.Target == "payment-service" && d.Port == 8080 && d.Confidence == model.High
+	}, "payment-service URL dep")
+
+	assertHasDep(t, deps, func(d model.NetworkDependency) bool {
+		return d.Target == "order-config" && d.Confidence == model.Medium
+	}, "configMapKeyRef dep")
+
+	assertHasDep(t, deps, func(d model.NetworkDependency) bool {
+		return d.Target == "db-credentials" && d.Confidence == model.Medium
+	}, "secretKeyRef dep")
+}
+
+func TestK8sServicePorts(t *testing.T) {
+	manifest := `apiVersion: v1
+kind: Service
+metadata:
+  name: order-service
+spec:
+  selector:
+    app: order
+  ports:
+  - port: 80
+    targetPort: 8080
+    protocol: TCP
+  - port: 443
+    targetPort: 8443
+`
+	path := writeTempFile(t, "service.yaml", manifest)
+	deps, err := parseK8s(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	assertDepCount(t, deps, 2)
+
+	assertHasDep(t, deps, func(d model.NetworkDependency) bool {
+		return d.Port == 80 && d.Source == "order-service" && d.Confidence == model.High
+	}, "service port 80")
+
+	assertHasDep(t, deps, func(d model.NetworkDependency) bool {
+		return d.Port == 443 && d.Source == "order-service"
+	}, "service port 443")
+}
+
+func TestK8sMultiDocumentYAML(t *testing.T) {
+	manifest := `apiVersion: v1
+kind: Service
+metadata:
+  name: frontend-svc
+spec:
+  ports:
+  - port: 80
+    targetPort: 3000
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frontend
+spec:
+  template:
+    spec:
+      containers:
+      - name: frontend
+        image: frontend:latest
+        ports:
+        - containerPort: 3000
+        env:
+        - name: API_URL
+          value: "http://api-gateway:8080"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: frontend-config
+data:
+  backend_url: "http://backend-service:9090/api"
+  cache_addr: "memcached:11211"
+`
+	path := writeTempFile(t, "multi-doc.yaml", manifest)
+	deps, err := parseK8s(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Service: 1 port
+	// Deployment: 1 container port + 1 URL env
+	// ConfigMap: 1 URL + 1 host:port
+	// Total: 5
+	assertDepCount(t, deps, 5)
+
+	assertHasDep(t, deps, func(d model.NetworkDependency) bool {
+		return d.Source == "frontend-svc" && d.Port == 80
+	}, "frontend service port")
+
+	assertHasDep(t, deps, func(d model.NetworkDependency) bool {
+		return d.Source == "frontend" && d.Port == 3000 && d.Target == "frontend"
+	}, "frontend container port")
+
+	assertHasDep(t, deps, func(d model.NetworkDependency) bool {
+		return d.Source == "frontend" && d.Target == "api-gateway" && d.Port == 8080
+	}, "API URL env dep")
+
+	assertHasDep(t, deps, func(d model.NetworkDependency) bool {
+		return d.Source == "frontend-config" && d.Target == "backend-service" && d.Port == 9090
+	}, "ConfigMap backend URL")
+
+	assertHasDep(t, deps, func(d model.NetworkDependency) bool {
+		return d.Source == "frontend-config" && d.Target == "memcached" && d.Port == 11211
+	}, "ConfigMap memcached host:port")
+}
+
+func TestK8sNonK8sYAMLReturnsNil(t *testing.T) {
+	// Spring Boot application.yml — no apiVersion/kind
+	content := `spring:
+  datasource:
+    url: jdbc:postgresql://localhost:5432/mydb
+  redis:
+    host: redis-server
+    port: 6379
+server:
+  port: 8080
+`
+	path := writeTempFile(t, "application.yml", content)
+	deps, err := parseK8s(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if deps != nil {
+		t.Errorf("expected nil deps for non-K8s YAML, got %d deps", len(deps))
+	}
+}
+
+func TestK8sStatefulSet(t *testing.T) {
+	manifest := `apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+spec:
+  replicas: 3
+  template:
+    spec:
+      containers:
+      - name: postgres
+        image: postgres:15
+        ports:
+        - containerPort: 5432
+        env:
+        - name: REPLICATION_HOST
+          value: "postgres-0.postgres.db.svc.cluster.local:5432"
+`
+	path := writeTempFile(t, "statefulset.yaml", manifest)
+	deps, err := parseK8s(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	assertDepCount(t, deps, 2)
+
+	assertHasDep(t, deps, func(d model.NetworkDependency) bool {
+		return d.Port == 5432 && d.Target == "postgres" && d.Confidence == model.High
+	}, "postgres container port")
+
+	assertHasDep(t, deps, func(d model.NetworkDependency) bool {
+		return d.Target == "postgres-0.postgres.db" && d.Port == 5432 && d.Confidence == model.High
+	}, "replication K8s DNS")
+}
+
+func TestK8sConfigMap(t *testing.T) {
+	manifest := `apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: app-config
+data:
+  database_host: "postgres-primary:5432"
+  redis_url: "redis://redis-cluster:6379"
+  plain_text: "no network info here"
+`
+	path := writeTempFile(t, "configmap.yaml", manifest)
+	deps, err := parseK8s(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	assertDepCount(t, deps, 2)
+
+	assertHasDep(t, deps, func(d model.NetworkDependency) bool {
+		return d.Target == "postgres-primary" && d.Port == 5432
+	}, "ConfigMap postgres host:port")
+
+	assertHasDep(t, deps, func(d model.NetworkDependency) bool {
+		return d.Target == "redis-cluster" && d.Port == 6379
+	}, "ConfigMap redis URL")
+}
+
+// --- test helpers ---
+
+func assertDepCount(t *testing.T, deps []model.NetworkDependency, want int) {
+	t.Helper()
+	if len(deps) != want {
+		t.Errorf("expected %d dependencies, got %d", want, len(deps))
+		for i, d := range deps {
+			t.Logf("  [%d] %s -> %s:%d (%s) %q", i, d.Source, d.Target, d.Port, d.Confidence, d.Description)
+		}
+	}
+}
+
+func assertHasDep(t *testing.T, deps []model.NetworkDependency, match func(model.NetworkDependency) bool, desc string) {
+	t.Helper()
+	for _, d := range deps {
+		if match(d) {
+			return
+		}
+	}
+	t.Errorf("missing expected dependency: %s", desc)
+	for i, d := range deps {
+		t.Logf("  [%d] %s -> %s:%d (%s) %q", i, d.Source, d.Target, d.Port, d.Confidence, d.Description)
+	}
+}
