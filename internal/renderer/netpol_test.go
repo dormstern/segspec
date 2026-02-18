@@ -268,3 +268,75 @@ func TestNetworkPolicyTwoPolicies(t *testing.T) {
 		t.Error("multiple policies should be separated by ---")
 	}
 }
+
+func TestPerServiceNetworkPolicy(t *testing.T) {
+	ds := model.NewDependencySet("myapp")
+	ds.Add(model.NetworkDependency{Source: "frontend", Target: "cartservice", Port: 8080, Protocol: "TCP"})
+	ds.Add(model.NetworkDependency{Source: "cartservice", Target: "redis", Port: 6379, Protocol: "TCP"})
+
+	output := PerServiceNetworkPolicy(ds)
+
+	// Should contain policies for frontend, cartservice, and redis
+	if !strings.Contains(output, "name: frontend-netpol") {
+		t.Error("missing frontend policy")
+	}
+	if !strings.Contains(output, "name: cartservice-netpol") {
+		t.Error("missing cartservice policy")
+	}
+	if !strings.Contains(output, "name: redis-netpol") {
+		t.Error("missing redis policy")
+	}
+
+	// cartservice should have ingress from frontend
+	if !strings.Contains(output, "app: frontend") {
+		t.Error("missing ingress from frontend in cartservice policy")
+	}
+
+	// cartservice should have egress to redis
+	if !strings.Contains(output, "app: redis") {
+		t.Error("missing egress to redis in cartservice policy")
+	}
+
+	// All services should have Ingress and Egress in policyTypes
+	if strings.Count(output, "- Ingress") < 3 {
+		t.Errorf("expected Ingress policyType in each service policy, got %d", strings.Count(output, "- Ingress"))
+	}
+	if strings.Count(output, "- Egress") < 3 {
+		t.Errorf("expected Egress policyType in each service policy, got %d", strings.Count(output, "- Egress"))
+	}
+}
+
+func TestPerServiceNetworkPolicyEmpty(t *testing.T) {
+	ds := model.NewDependencySet("empty")
+	output := PerServiceNetworkPolicy(ds)
+	if output != "" {
+		t.Errorf("expected empty output for no deps, got %q", output)
+	}
+}
+
+func TestPerServiceNetworkPolicyDNSEgress(t *testing.T) {
+	ds := model.NewDependencySet("myapp")
+	ds.Add(model.NetworkDependency{Source: "frontend", Target: "api", Port: 8080, Protocol: "TCP"})
+
+	output := PerServiceNetworkPolicy(ds)
+
+	// frontend has egress, so it should get DNS egress rule
+	if !strings.Contains(output, "kube-system") {
+		t.Error("missing DNS egress to kube-system for service with egress rules")
+	}
+}
+
+func TestPerServiceNetworkPolicySkipsInvalidPort(t *testing.T) {
+	ds := model.NewDependencySet("myapp")
+	ds.Add(model.NetworkDependency{Source: "frontend", Target: "api", Port: 8080, Protocol: "TCP"})
+	ds.Add(model.NetworkDependency{Source: "frontend", Target: "unknown", Port: 0, Protocol: "TCP"})
+
+	output := PerServiceNetworkPolicy(ds)
+
+	if strings.Contains(output, "port: 0") {
+		t.Error("port 0 should not appear in output")
+	}
+	if !strings.Contains(output, "port: 8080") {
+		t.Error("valid port 8080 should be present")
+	}
+}

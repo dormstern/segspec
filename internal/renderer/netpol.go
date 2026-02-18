@@ -112,6 +112,140 @@ func NetworkPolicy(ds *model.DependencySet) string {
 	return b.String()
 }
 
+// PerServiceNetworkPolicy generates one NetworkPolicy per service with both
+// ingress and egress rules. Each policy includes:
+// - Default-deny for both directions (via policyTypes)
+// - Ingress rules for what talks to this service
+// - Egress rules for what this service talks to
+// - DNS egress to kube-system for services that have egress
+func PerServiceNetworkPolicy(ds *model.DependencySet) string {
+	deps := ds.Dependencies()
+	if len(deps) == 0 {
+		return ""
+	}
+
+	// Discover all services (both sources and targets)
+	allServices := make(map[string]bool)
+	for _, dep := range deps {
+		if dep.Source != "" {
+			allServices[dep.Source] = true
+		}
+		if dep.Target != "" {
+			allServices[dep.Target] = true
+		}
+	}
+	serviceList := make([]string, 0, len(allServices))
+	for s := range allServices {
+		serviceList = append(serviceList, s)
+	}
+	sort.Strings(serviceList)
+
+	var b strings.Builder
+	for i, svc := range serviceList {
+		if i > 0 {
+			fmt.Fprintf(&b, "---\n")
+		}
+		svcName := sanitizeName(svc)
+		egress := ds.EgressFor(svc)
+		ingress := ds.IngressFor(svc)
+
+		fmt.Fprintf(&b, "apiVersion: networking.k8s.io/v1\n")
+		fmt.Fprintf(&b, "kind: NetworkPolicy\n")
+		fmt.Fprintf(&b, "metadata:\n")
+		fmt.Fprintf(&b, "  name: %s-netpol\n", svcName)
+		fmt.Fprintf(&b, "  labels:\n")
+		fmt.Fprintf(&b, "    generated-by: segspec\n")
+		fmt.Fprintf(&b, "spec:\n")
+		fmt.Fprintf(&b, "  podSelector:\n")
+		fmt.Fprintf(&b, "    matchLabels:\n")
+		fmt.Fprintf(&b, "      app: %s\n", svcName)
+		fmt.Fprintf(&b, "  policyTypes:\n")
+		fmt.Fprintf(&b, "    - Ingress\n")
+		fmt.Fprintf(&b, "    - Egress\n")
+
+		// Ingress rules
+		if len(ingress) > 0 {
+			fmt.Fprintf(&b, "  ingress:\n")
+			for _, dep := range ingress {
+				if dep.Source == "" {
+					continue
+				}
+				renderIngressFrom(&b, dep.Source)
+				if dep.Port > 0 {
+					proto := strings.ToUpper(dep.Protocol)
+					if proto == "" {
+						proto = "TCP"
+					}
+					fmt.Fprintf(&b, "      ports:\n")
+					fmt.Fprintf(&b, "        - port: %d\n", dep.Port)
+					fmt.Fprintf(&b, "          protocol: %s\n", proto)
+				}
+			}
+		}
+
+		// Egress rules
+		if len(egress) > 0 {
+			fmt.Fprintf(&b, "  egress:\n")
+			for _, dep := range egress {
+				if dep.Port <= 0 {
+					continue
+				}
+				proto := strings.ToUpper(dep.Protocol)
+				if proto == "" {
+					proto = "TCP"
+				}
+				renderEgressTo(&b, dep.Target)
+				fmt.Fprintf(&b, "      ports:\n")
+				fmt.Fprintf(&b, "        - port: %d\n", dep.Port)
+				fmt.Fprintf(&b, "          protocol: %s\n", proto)
+			}
+			// DNS egress
+			fmt.Fprintf(&b, "    - to:\n")
+			fmt.Fprintf(&b, "        - namespaceSelector:\n")
+			fmt.Fprintf(&b, "            matchLabels:\n")
+			fmt.Fprintf(&b, "              kubernetes.io/metadata.name: kube-system\n")
+			fmt.Fprintf(&b, "      ports:\n")
+			fmt.Fprintf(&b, "        - port: 53\n")
+			fmt.Fprintf(&b, "          protocol: UDP\n")
+			fmt.Fprintf(&b, "        - port: 53\n")
+			fmt.Fprintf(&b, "          protocol: TCP\n")
+		}
+	}
+
+	return b.String()
+}
+
+// renderIngressFrom writes the `from:` block for an ingress rule.
+// Mirrors renderEgressTo but uses `from:` instead of `to:`.
+func renderIngressFrom(b *strings.Builder, source string) {
+	if ip := net.ParseIP(source); ip != nil {
+		fmt.Fprintf(b, "    - from:\n")
+		fmt.Fprintf(b, "        - ipBlock:\n")
+		fmt.Fprintf(b, "            cidr: %s/32\n", source)
+	} else if strings.Contains(source, ".") {
+		parts := strings.SplitN(source, ".", 3)
+		svcName := parts[0]
+		namespace := ""
+		if len(parts) >= 2 {
+			namespace = parts[1]
+		}
+		fmt.Fprintf(b, "    - from:\n")
+		fmt.Fprintf(b, "        - podSelector:\n")
+		fmt.Fprintf(b, "            matchLabels:\n")
+		fmt.Fprintf(b, "              app: %s\n", svcName)
+		if namespace != "" {
+			fmt.Fprintf(b, "          namespaceSelector:\n")
+			fmt.Fprintf(b, "            matchLabels:\n")
+			fmt.Fprintf(b, "              kubernetes.io/metadata.name: %s\n", namespace)
+		}
+	} else {
+		fmt.Fprintf(b, "    - from:\n")
+		fmt.Fprintf(b, "        - podSelector:\n")
+		fmt.Fprintf(b, "            matchLabels:\n")
+		fmt.Fprintf(b, "              app: %s\n", source)
+	}
+}
+
 // renderEgressTo writes the appropriate `to:` block for the given target.
 // - Simple service name (no dots, no IP) -> podSelector with app label
 // - FQDN (contains dots, not an IP) -> podSelector + namespaceSelector
