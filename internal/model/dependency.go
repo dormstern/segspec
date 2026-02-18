@@ -104,6 +104,21 @@ func (ds *DependencySet) IngressFor(service string) []NetworkDependency {
 	return result
 }
 
+// EgressFor returns all dependencies whose Source matches the given service name,
+// sorted by Key(). These represent outbound connections from that service.
+func (ds *DependencySet) EgressFor(service string) []NetworkDependency {
+	var result []NetworkDependency
+	for _, dep := range ds.deps {
+		if dep.Source == service {
+			result = append(result, dep)
+		}
+	}
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].Key() < result[j].Key()
+	})
+	return result
+}
+
 // Len returns the number of unique dependencies.
 func (ds *DependencySet) Len() int {
 	return len(ds.deps)

@@ -110,6 +110,23 @@ func TestDependencySet_IngressFor(t *testing.T) {
 	}
 }
 
+func TestDependencySet_EgressFor(t *testing.T) {
+	ds := NewDependencySet("myapp")
+	ds.Add(NetworkDependency{Source: "frontend", Target: "cartservice", Port: 8080, Protocol: "TCP"})
+	ds.Add(NetworkDependency{Source: "frontend", Target: "productcatalog", Port: 3550, Protocol: "TCP"})
+	ds.Add(NetworkDependency{Source: "cartservice", Target: "redis", Port: 6379, Protocol: "TCP"})
+
+	egress := ds.EgressFor("frontend")
+	if len(egress) != 2 {
+		t.Fatalf("got %d egress deps for frontend, want 2", len(egress))
+	}
+
+	egress = ds.EgressFor("redis")
+	if len(egress) != 0 {
+		t.Fatalf("got %d egress deps for redis, want 0", len(egress))
+	}
+}
+
 func TestDependenciesSorted(t *testing.T) {
 	ds := NewDependencySet("app")
 	ds.Add(NetworkDependency{Source: "app", Target: "zookeeper", Port: 2181, Protocol: "TCP"})
