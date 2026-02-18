@@ -12,8 +12,10 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/dormorgenstern/segspec/internal/ai"
+	"github.com/dormorgenstern/segspec/internal/model"
 	"github.com/dormorgenstern/segspec/internal/parser"
 	"github.com/dormorgenstern/segspec/internal/renderer"
+	"github.com/dormorgenstern/segspec/internal/tui"
 	"github.com/dormorgenstern/segspec/internal/walker"
 )
 
@@ -173,12 +175,14 @@ func runAnalyze(cmd *cobra.Command, args []string) error {
 		fmt.Fprint(out, renderer.Summary(ds))
 	case "netpol":
 		fmt.Fprint(out, renderer.NetworkPolicy(ds))
+	case "per-service":
+		fmt.Fprint(out, renderer.PerServiceNetworkPolicy(ds))
 	case "all":
 		fmt.Fprint(out, renderer.Summary(ds))
 		fmt.Fprintln(out, "---")
 		fmt.Fprint(out, renderer.NetworkPolicy(ds))
 	default:
-		return fmt.Errorf("unknown format: %s (valid: summary, netpol, all)", outputFormat)
+		return fmt.Errorf("unknown format: %s (valid: summary, netpol, per-service, all)", outputFormat)
 	}
 
 	return nil
