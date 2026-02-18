@@ -1,0 +1,44 @@
+version: 2
+
+builds:
+  - binary: segspec
+    main: .
+    env:
+      - CGO_ENABLED=0
+    ldflags:
+      - -s -w -X github.com/dormstern/segspec/cmd.Version={{.Version}}
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ignore:
+      - goos: windows
+        goarch: arm64
+
+archives:
+  - format: tar.gz
+    files:
+      - README.md
+      - LICENSE
+    format_overrides:
+      - goos: windows
+        format: zip
+
+checksum:
+  name_template: "checksums.txt"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+
+release:
+  github:
+    owner: dormstern
+    name: segspec
