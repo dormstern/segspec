@@ -58,6 +58,25 @@ func TestDependencySetMerge(t *testing.T) {
 	}
 }
 
+func TestDependencySet_Sources(t *testing.T) {
+	ds := NewDependencySet("myapp")
+	ds.Add(NetworkDependency{Source: "frontend", Target: "cartservice", Port: 8080, Protocol: "TCP"})
+	ds.Add(NetworkDependency{Source: "frontend", Target: "productcatalog", Port: 3550, Protocol: "TCP"})
+	ds.Add(NetworkDependency{Source: "checkout", Target: "cartservice", Port: 8080, Protocol: "TCP"})
+	ds.Add(NetworkDependency{Source: "cartservice", Target: "redis", Port: 6379, Protocol: "TCP"})
+
+	sources := ds.Sources()
+	expected := []string{"cartservice", "checkout", "frontend"}
+	if len(sources) != len(expected) {
+		t.Fatalf("got %d sources, want %d: %v", len(sources), len(expected), sources)
+	}
+	for i, s := range sources {
+		if s != expected[i] {
+			t.Errorf("sources[%d] = %q, want %q", i, s, expected[i])
+		}
+	}
+}
+
 func TestDependenciesSorted(t *testing.T) {
 	ds := NewDependencySet("app")
 	ds.Add(NetworkDependency{Source: "app", Target: "zookeeper", Port: 2181, Protocol: "TCP"})

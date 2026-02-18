@@ -73,6 +73,22 @@ func (ds *DependencySet) Merge(other *DependencySet) {
 	}
 }
 
+// Sources returns a sorted, deduplicated list of all source service names.
+func (ds *DependencySet) Sources() []string {
+	seen := make(map[string]bool)
+	for _, dep := range ds.deps {
+		if dep.Source != "" {
+			seen[dep.Source] = true
+		}
+	}
+	sources := make([]string, 0, len(seen))
+	for s := range seen {
+		sources = append(sources, s)
+	}
+	sort.Strings(sources)
+	return sources
+}
+
 // Len returns the number of unique dependencies.
 func (ds *DependencySet) Len() int {
 	return len(ds.deps)
