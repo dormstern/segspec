@@ -29,3 +29,18 @@ Thumbs.db
 # Build
 dist/
 bin/
+
+# Internal state files (Agentic PM)
+IDENTITY.md
+CLAUDE.md
+architecture.md
+features.json
+progress.md
+releases.json
+
+# Internal docs
+docs/plans/
+docs/research/
+docs/reddit-launch-posts.md
+docs/SHOWOFF.md
+docs/SELF-SERVE-GAPS.md
