@@ -1,0 +1,10 @@
+spring:
+  datasource:
+    url: jdbc:postgresql://db-primary:5432/orders
+  redis:
+    host: cache-server
+    port: 6380
+  kafka:
+    bootstrap-servers: kafka-1:9092,kafka-2:9092
+server:
+  port: 8080

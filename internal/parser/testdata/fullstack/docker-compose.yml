@@ -1,0 +1,27 @@
+version: '3.8'
+services:
+  api:
+    image: api-service:latest
+    ports:
+      - "8080:8080"
+    depends_on:
+      - postgres
+      - redis
+    environment:
+      - DATABASE_URL=jdbc:postgresql://postgres:5432/mydb
+      - REDIS_URL=redis://redis:6379
+
+  postgres:
+    image: postgres:15
+    ports:
+      - "5432:5432"
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    ports:
+      - "9092:9092"
