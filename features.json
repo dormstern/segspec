@@ -20,6 +20,12 @@
       "name": "Output & UX",
       "type": "product",
       "release": "1.0.0"
+    },
+    {
+      "id": "wave-3",
+      "name": "AI Analysis",
+      "type": "product",
+      "release": "1.0.0"
     }
   ],
   "features": [
@@ -250,6 +256,29 @@
         { "id": "parser-registry", "type": "hard" },
         { "id": "renderer-netpol", "type": "hard" },
         { "id": "renderer-summary", "type": "hard" }
+      ],
+      "priority": 1,
+      "status": "pending",
+      "autonomy": "T2",
+      "estimated_tests": 5,
+      "actual_tests": null,
+      "build_resets": 0,
+      "build_started": null,
+      "quality_score": null,
+      "post_mvp_status": null,
+      "signal_id": "BOOTSTRAP",
+      "requested_by": "Product Lead",
+      "rework_of": null
+    },
+    {
+      "id": "ai-analyzer",
+      "name": "LLM-powered dependency analyzer",
+      "intent": "Add --ai flag to analyze command. When enabled, collect all config/source files, send to Claude API with a focused prompt to discover network dependencies that rule-based parsers missed. Merge AI findings with parser findings, mark as confidence 'ai-inferred'. Requires ANTHROPIC_API_KEY env var. Graceful fallback when key absent.",
+      "wave": "wave-3",
+      "type": "feature",
+      "depends_on": [
+        { "id": "dependency-model", "type": "hard" },
+        { "id": "e2e-integration", "type": "hard" }
       ],
       "priority": 1,
       "status": "pending",

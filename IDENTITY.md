@@ -12,7 +12,7 @@
 
 - Go: single binary distribution, zero runtime dependencies
 - CLI-only: no web UI, no API server, no daemon process
-- Zero external services: no API keys, no accounts, no telemetry, fully offline
+- Offline by default, AI-enhanced with --ai flag (requires ANTHROPIC_API_KEY)
 - K8s NetworkPolicy YAML as primary output format (other formats in future releases)
 - Parsers are pure functions: file in, []NetworkDependency out, independently testable
 
@@ -20,3 +20,9 @@
 
 ### v1.0 (2026-02-18) -- Genesis
 - Initial identity. Derived from Agentic Founder thesis validation (AI-Native Microsegmentation) and brainstorming session identifying whitespace: no tool combines app analysis with network policy generation.
+
+### v1.0.1 (2026-02-18) -- AI-native identity evolution
+- **Trigger**: Product Lead direction — "should be ai-native or agentic, something that will make this unfair advantage"
+- **Changed**: Architecture constraint from "zero external services" to "offline by default, AI-enhanced with --ai flag"
+- **Rationale**: Rule-based parsers handle structured configs (80%). LLM handles arbitrary formats and implicit dependencies (the 20% nobody else can touch). This is the core differentiator vs AutoSeg and all other tools.
+- **Approved by**: Product Lead
