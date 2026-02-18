@@ -6,7 +6,7 @@
 
 [![Go](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go)](https://go.dev)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Build Status](https://img.shields.io/github/actions/workflow/status/dormorgenstern/segspec/ci.yml?branch=main)](https://github.com/dormstern/segspec/actions)
+[![Build Status](https://img.shields.io/github/actions/workflow/status/dormstern/segspec/ci.yml?branch=main)](https://github.com/dormstern/segspec/actions)
 
 ---
 
