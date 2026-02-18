@@ -2,6 +2,7 @@ package parser
 
 import (
 	"bufio"
+	"bytes"
 	"fmt"
 	"net/url"
 	"os"
@@ -19,8 +20,8 @@ func init() {
 	defaultRegistry.Register("application.properties", parseSpringProperties)
 }
 
-// jdbcPattern matches JDBC URLs like jdbc:postgresql://host:port/db
-var jdbcPattern = regexp.MustCompile(`^jdbc:(\w+)://([^/:]+):(\d+)`)
+// jdbcPattern matches JDBC URLs like jdbc:postgresql://host:port/db or jdbc:postgresql://host/db
+var jdbcPattern = regexp.MustCompile(`^jdbc:(\w+)://([^/:]+)(?::(\d+))?`)
 
 // hostPortPattern matches host:port where port is numeric
 var hostPortPattern = regexp.MustCompile(`([a-zA-Z0-9][-a-zA-Z0-9_.]+):(\d{2,5})`)
@@ -49,6 +50,12 @@ type springConfig struct {
 			Host string `yaml:"host"`
 			Port int    `yaml:"port"`
 		} `yaml:"redis"`
+		Data struct {
+			Redis struct {
+				Host string `yaml:"host"`
+				Port int    `yaml:"port"`
+			} `yaml:"redis"`
+		} `yaml:"data"`
 		Kafka struct {
 			BootstrapServers string `yaml:"bootstrap-servers"`
 		} `yaml:"kafka"`
@@ -68,11 +75,41 @@ func parseSpringYAML(path string) ([]model.NetworkDependency, error) {
 		return nil, fmt.Errorf("reading %s: %w", path, err)
 	}
 
-	var cfg springConfig
-	if err := yaml.Unmarshal(data, &cfg); err != nil {
-		return nil, fmt.Errorf("parsing YAML %s: %w", path, err)
+	var allDeps []model.NetworkDependency
+
+	// Use yaml.NewDecoder to read ALL documents separated by ---
+	decoder := yaml.NewDecoder(bytes.NewReader(data))
+	for {
+		var cfg springConfig
+		err := decoder.Decode(&cfg)
+		if err != nil {
+			break // end of documents or parse error
+		}
+
+		deps := extractSpringDeps(cfg, path)
+		allDeps = mergeUnique(allDeps, deps)
 	}
 
+	// Also scan all string values in the raw YAML documents for URL patterns not caught above
+	rawDecoder := yaml.NewDecoder(bytes.NewReader(data))
+	for {
+		var raw map[string]interface{}
+		err := rawDecoder.Decode(&raw)
+		if err != nil {
+			break
+		}
+		if raw == nil {
+			continue
+		}
+		found := extractURLsFromMap(raw, path)
+		allDeps = mergeUnique(allDeps, found)
+	}
+
+	return allDeps, nil
+}
+
+// extractSpringDeps extracts dependencies from a single parsed springConfig document.
+func extractSpringDeps(cfg springConfig, path string) []model.NetworkDependency {
 	var deps []model.NetworkDependency
 
 	// Datasource URL (JDBC)
@@ -82,7 +119,7 @@ func parseSpringYAML(path string) ([]model.NetworkDependency, error) {
 		}
 	}
 
-	// Redis
+	// Redis (Spring Boot 2.x: spring.redis.host)
 	if cfg.Spring.Redis.Host != "" {
 		port := cfg.Spring.Redis.Port
 		if port == 0 {
@@ -90,6 +127,22 @@ func parseSpringYAML(path string) ([]model.NetworkDependency, error) {
 		}
 		deps = append(deps, model.NetworkDependency{
 			Target:      cfg.Spring.Redis.Host,
+			Port:        port,
+			Protocol:    "TCP",
+			Description: "Redis",
+			Confidence:  model.High,
+			SourceFile:  path,
+		})
+	}
+
+	// Redis (Spring Boot 3.x: spring.data.redis.host)
+	if cfg.Spring.Data.Redis.Host != "" {
+		port := cfg.Spring.Data.Redis.Port
+		if port == 0 {
+			port = 6379
+		}
+		deps = append(deps, model.NetworkDependency{
+			Target:      cfg.Spring.Data.Redis.Host,
 			Port:        port,
 			Protocol:    "TCP",
 			Description: "Redis",
@@ -140,14 +193,7 @@ func parseSpringYAML(path string) ([]model.NetworkDependency, error) {
 		})
 	}
 
-	// Also scan all string values in the raw YAML for URL patterns not caught above
-	var raw map[string]interface{}
-	if err := yaml.Unmarshal(data, &raw); err == nil {
-		found := extractURLsFromMap(raw, path)
-		deps = mergeUnique(deps, found)
-	}
-
-	return deps, nil
+	return deps
 }
 
 func parseSpringProperties(path string) ([]model.NetworkDependency, error) {
@@ -298,16 +344,53 @@ func parseKafkaBrokers(s string) []hostPort {
 	return result
 }
 
+// jdbcDefaultPorts maps JDBC driver names to their default ports.
+var jdbcDefaultPorts = map[string]int{
+	"postgresql": 5432,
+	"postgres":   5432,
+	"mysql":      3306,
+	"mariadb":    3306,
+	"oracle":     1521,
+	"sqlserver":  1433,
+	"mssql":      1433,
+}
+
+// jdbcSkipDrivers lists JDBC drivers that are in-memory/embedded and not network deps.
+var jdbcSkipDrivers = map[string]bool{
+	"h2":    true,
+	"derby": true,
+}
+
 func parseJDBC(raw, sourceFile string) (model.NetworkDependency, bool) {
 	matches := jdbcPattern.FindStringSubmatch(raw)
 	if matches == nil {
 		return model.NetworkDependency{}, false
 	}
-	driver := matches[1]
+	driver := strings.ToLower(matches[1])
 	host := matches[2]
-	port, _ := strconv.Atoi(matches[3])
+
+	// Skip in-memory/embedded databases
+	if jdbcSkipDrivers[driver] {
+		return model.NetworkDependency{}, false
+	}
+
+	confidence := model.High
+	port := 0
+	if matches[3] != "" {
+		port, _ = strconv.Atoi(matches[3])
+	} else {
+		// Port not specified — use default for the driver
+		defaultPort, hasDefault := jdbcDefaultPorts[driver]
+		if !hasDefault {
+			// Unknown driver with no port — can't determine the port
+			return model.NetworkDependency{}, false
+		}
+		port = defaultPort
+		confidence = model.Medium
+	}
+
 	desc := driver
-	if d, ok := jdbcDescriptions[strings.ToLower(driver)]; ok {
+	if d, ok := jdbcDescriptions[driver]; ok {
 		desc = d
 	}
 	return model.NetworkDependency{
@@ -315,7 +398,7 @@ func parseJDBC(raw, sourceFile string) (model.NetworkDependency, bool) {
 		Port:        port,
 		Protocol:    "TCP",
 		Description: desc,
-		Confidence:  model.High,
+		Confidence:  confidence,
 		SourceFile:  sourceFile,
 	}, true
 }

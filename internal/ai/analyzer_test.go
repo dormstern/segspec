@@ -857,8 +857,10 @@ func TestBuildGeminiPrompt(t *testing.T) {
 func TestCallGeminiSuccess(t *testing.T) {
 	aiJSON := `[{"host": "postgres", "port": 5432, "protocol": "TCP", "service_type": "database", "description": "PostgreSQL"}]`
 
+	var capturedReq *http.Request
 	mock := &mockHTTPClient{
 		DoFunc: func(req *http.Request) (*http.Response, error) {
+			capturedReq = req
 			resp := geminiResponse{
 				Candidates: []struct {
 					Content struct {
@@ -882,12 +884,23 @@ func TestCallGeminiSuccess(t *testing.T) {
 	httpClient = mock
 	defer func() { httpClient = origClient }()
 
-	text, err := callGemini("test-key", "test prompt")
+	text, err := callGemini("test-api-key-value", "test prompt")
 	if err != nil {
 		t.Fatalf("callGemini() error: %v", err)
 	}
 	if text != aiJSON {
 		t.Errorf("expected %q, got %q", aiJSON, text)
+	}
+
+	// Verify API key is sent via header, not URL query parameter.
+	if capturedReq.Header.Get("x-goog-api-key") != "test-api-key-value" {
+		t.Errorf("expected x-goog-api-key header to be 'test-api-key-value', got %q", capturedReq.Header.Get("x-goog-api-key"))
+	}
+	if capturedReq.URL.Query().Get("key") != "" {
+		t.Error("API key should NOT be in URL query parameter (leaks in logs/proxies)")
+	}
+	if strings.Contains(capturedReq.URL.String(), "test-api-key-value") {
+		t.Errorf("API key should not appear anywhere in URL, got: %s", capturedReq.URL.String())
 	}
 }
 
@@ -905,12 +918,36 @@ func TestCallGeminiErrorStatus(t *testing.T) {
 	httpClient = mock
 	defer func() { httpClient = origClient }()
 
-	_, err := callGemini("bad-key", "prompt")
+	_, err := callGemini("super-secret-api-key-12345", "prompt")
 	if err == nil {
 		t.Fatal("expected error for 403")
 	}
 	if !strings.Contains(err.Error(), "403") {
 		t.Errorf("error should mention 403, got: %v", err)
+	}
+	// Verify the API key is NOT leaked in error messages.
+	if strings.Contains(err.Error(), "super-secret-api-key-12345") {
+		t.Errorf("error message should NOT contain the API key, got: %v", err)
+	}
+}
+
+func TestCallGeminiNetworkErrorDoesNotLeakKey(t *testing.T) {
+	mock := &mockHTTPClient{
+		DoFunc: func(req *http.Request) (*http.Response, error) {
+			return nil, fmt.Errorf("dial tcp: connection refused")
+		},
+	}
+
+	origClient := httpClient
+	httpClient = mock
+	defer func() { httpClient = origClient }()
+
+	_, err := callGemini("my-secret-gemini-key-xyz", "prompt")
+	if err == nil {
+		t.Fatal("expected error for network failure")
+	}
+	if strings.Contains(err.Error(), "my-secret-gemini-key-xyz") {
+		t.Errorf("error message should NOT contain the API key, got: %v", err)
 	}
 }
 
@@ -989,5 +1026,235 @@ func TestAnalyzeCloudEndToEnd(t *testing.T) {
 	}
 	if deps[0].Target != "postgres" {
 		t.Errorf("Target = %q, want postgres", deps[0].Target)
+	}
+}
+
+func TestRedactSecretsPasswordEquals(t *testing.T) {
+	input := "db.password=SuperSecret123"
+	result := redactSecrets(input)
+	if strings.Contains(result, "SuperSecret123") {
+		t.Errorf("password value should be redacted, got: %s", result)
+	}
+	if !strings.Contains(result, "password=") {
+		t.Errorf("password key should be preserved, got: %s", result)
+	}
+	if !strings.Contains(result, "[REDACTED]") {
+		t.Errorf("should contain [REDACTED], got: %s", result)
+	}
+}
+
+func TestRedactSecretsPasswordColon(t *testing.T) {
+	input := "password: my-secret-pass"
+	result := redactSecrets(input)
+	if strings.Contains(result, "my-secret-pass") {
+		t.Errorf("password value should be redacted, got: %s", result)
+	}
+	if !strings.Contains(result, "password:") {
+		t.Errorf("password key should be preserved, got: %s", result)
+	}
+}
+
+func TestRedactSecretsToken(t *testing.T) {
+	input := "token=abc123def456"
+	result := redactSecrets(input)
+	if strings.Contains(result, "abc123def456") {
+		t.Errorf("token value should be redacted, got: %s", result)
+	}
+	if !strings.Contains(result, "token=") {
+		t.Errorf("token key should be preserved, got: %s", result)
+	}
+}
+
+func TestRedactSecretsAPIKey(t *testing.T) {
+	input := "api_key=myapikey123"
+	result := redactSecrets(input)
+	if strings.Contains(result, "myapikey123") {
+		t.Errorf("api_key value should be redacted, got: %s", result)
+	}
+}
+
+func TestRedactSecretsApiKeyVariant(t *testing.T) {
+	input := "apikey=myapikey123"
+	result := redactSecrets(input)
+	if strings.Contains(result, "myapikey123") {
+		t.Errorf("apikey value should be redacted, got: %s", result)
+	}
+}
+
+func TestRedactSecretsSecret(t *testing.T) {
+	input := "secret: very-secret-value"
+	result := redactSecrets(input)
+	if strings.Contains(result, "very-secret-value") {
+		t.Errorf("secret value should be redacted, got: %s", result)
+	}
+}
+
+func TestRedactSecretsAWSKeys(t *testing.T) {
+	input := "AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY\nAWS_SESSION_TOKEN=FwoGZX..."
+	result := redactSecrets(input)
+	if strings.Contains(result, "wJalrXUtnFEMI") {
+		t.Errorf("AWS_SECRET_ACCESS_KEY should be redacted, got: %s", result)
+	}
+	if strings.Contains(result, "FwoGZX") {
+		t.Errorf("AWS_SESSION_TOKEN should be redacted, got: %s", result)
+	}
+}
+
+func TestRedactSecretsJWT(t *testing.T) {
+	input := "auth_token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U"
+	result := redactSecrets(input)
+	if strings.Contains(result, "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9") {
+		t.Errorf("JWT should be redacted, got: %s", result)
+	}
+}
+
+func TestRedactSecretsJWTStandalone(t *testing.T) {
+	input := "token: eyJhbGciOiJIUzI1NiJ9.eyJkYXRhIjoiZm9vIn0.signature"
+	result := redactSecrets(input)
+	if strings.Contains(result, "eyJhbGciOiJIUzI1NiJ9") {
+		t.Errorf("JWT should be redacted, got: %s", result)
+	}
+	if !strings.Contains(result, "[REDACTED]") {
+		t.Errorf("should contain [REDACTED], got: %s", result)
+	}
+}
+
+func TestRedactSecretsAPIKeyPatterns(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		leak  string
+	}{
+		{"sk- pattern", "key=sk-abc123def456ghi789", "sk-abc123def456ghi789"},
+		{"AKIA pattern", "aws_key=AKIAIOSFODNN7EXAMPLE", "AKIAIOSFODNN7EXAMPLE"},
+		{"ghp_ pattern", "github_token=ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", "ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"},
+		{"gho_ pattern", "oauth_token=gho_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", "gho_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := redactSecrets(tt.input)
+			if strings.Contains(result, tt.leak) {
+				t.Errorf("API key pattern should be redacted, got: %s", result)
+			}
+			if !strings.Contains(result, "[REDACTED]") {
+				t.Errorf("should contain [REDACTED], got: %s", result)
+			}
+		})
+	}
+}
+
+func TestRedactSecretsPreservesNonSecrets(t *testing.T) {
+	input := "db.host: postgres\ndb.port: 5432\nspring.datasource.url: jdbc:postgresql://db:5432/mydb"
+	result := redactSecrets(input)
+	if result != input {
+		t.Errorf("non-secret content should be unchanged\ninput:  %s\nresult: %s", input, result)
+	}
+}
+
+func TestRedactSecretsMultipleSecrets(t *testing.T) {
+	input := "password=secret1\ntoken=secret2\nhost=postgres"
+	result := redactSecrets(input)
+	if strings.Contains(result, "secret1") {
+		t.Errorf("password should be redacted, got: %s", result)
+	}
+	if strings.Contains(result, "secret2") {
+		t.Errorf("token should be redacted, got: %s", result)
+	}
+	if !strings.Contains(result, "host=postgres") {
+		t.Errorf("non-secret host should be preserved, got: %s", result)
+	}
+}
+
+func TestBuildGeminiPromptRedactsSecrets(t *testing.T) {
+	files := []fileEntry{
+		{Path: "app.yml", Content: "db.host: postgres\ndb.password: SuperSecret123"},
+	}
+
+	prompt := buildGeminiPrompt(files)
+
+	if strings.Contains(prompt, "SuperSecret123") {
+		t.Error("buildGeminiPrompt should redact secrets before including file content")
+	}
+	if !strings.Contains(prompt, "db.host: postgres") {
+		t.Error("buildGeminiPrompt should preserve non-secret content")
+	}
+	if !strings.Contains(prompt, "[REDACTED]") {
+		t.Error("buildGeminiPrompt should contain [REDACTED] for redacted values")
+	}
+}
+
+func TestHTTPClientHasTimeout(t *testing.T) {
+	// The default httpClient variable should be a *http.Client with a non-zero Timeout.
+	// This ensures hanging Ollama/Gemini endpoints won't freeze the CLI.
+	client, ok := httpClient.(*http.Client)
+	if !ok {
+		t.Fatal("httpClient should be *http.Client by default")
+	}
+	if client.Timeout == 0 {
+		t.Error("httpClient.Timeout should be non-zero to prevent hanging connections")
+	}
+	if client.Timeout.Seconds() < 10 {
+		t.Errorf("httpClient.Timeout = %v, expected at least 10 seconds", client.Timeout)
+	}
+}
+
+func TestAnalyzeCloudStderrWarning(t *testing.T) {
+	origKey := os.Getenv("GEMINI_API_KEY")
+	os.Setenv("GEMINI_API_KEY", "test-key")
+	defer func() {
+		if origKey != "" {
+			os.Setenv("GEMINI_API_KEY", origKey)
+		} else {
+			os.Unsetenv("GEMINI_API_KEY")
+		}
+	}()
+
+	// Capture stderr
+	origStderr := os.Stderr
+	r, w, _ := os.Pipe()
+	os.Stderr = w
+
+	mock := &mockHTTPClient{
+		DoFunc: func(req *http.Request) (*http.Response, error) {
+			resp := geminiResponse{
+				Candidates: []struct {
+					Content struct {
+						Parts []geminiPart `json:"parts"`
+					} `json:"content"`
+				}{
+					{Content: struct {
+						Parts []geminiPart `json:"parts"`
+					}{Parts: []geminiPart{{Text: "[]"}}}},
+				},
+			}
+			body, _ := json.Marshal(resp)
+			return &http.Response{
+				StatusCode: 200,
+				Body:       io.NopCloser(bytes.NewReader(body)),
+			}, nil
+		},
+	}
+
+	origClient := httpClient
+	httpClient = mock
+	defer func() { httpClient = origClient }()
+
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "app.yml"), []byte("key: value"), 0644)
+
+	_, _ = Analyze(dir, nil, "cloud")
+
+	w.Close()
+	var buf bytes.Buffer
+	io.Copy(&buf, r)
+	os.Stderr = origStderr
+
+	stderrOutput := buf.String()
+	if !strings.Contains(stderrOutput, "Google Gemini API") {
+		t.Errorf("cloud mode should print stderr warning about Gemini, got: %q", stderrOutput)
+	}
+	if !strings.Contains(stderrOutput, "--ai local") {
+		t.Errorf("cloud mode warning should mention --ai local alternative, got: %q", stderrOutput)
 	}
 }

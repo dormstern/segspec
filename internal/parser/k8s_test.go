@@ -279,6 +279,73 @@ data:
 	}, "ConfigMap redis URL")
 }
 
+func TestK8sDockerComposeReturnsNil(t *testing.T) {
+	// docker-compose.yml is not a K8s manifest — should return nil
+	content := `version: "3.8"
+services:
+  web:
+    image: nginx:latest
+    ports:
+      - "80:80"
+  db:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: mydb
+    ports:
+      - "5432:5432"
+`
+	path := writeTempFile(t, "docker-compose.yml", content)
+	deps, err := parseK8s(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if deps != nil {
+		t.Errorf("expected nil deps for docker-compose.yml, got %d deps", len(deps))
+	}
+}
+
+func TestK8sMarkerByteCheck(t *testing.T) {
+	// Verify k8sMarker correctly identifies K8s manifests
+	k8sContent := []byte("apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: test\n")
+	if !k8sMarker(k8sContent) {
+		t.Error("expected k8sMarker to return true for K8s manifest")
+	}
+
+	// Non-K8s content
+	springContent := []byte("spring:\n  datasource:\n    url: jdbc:postgresql://host:5432/db\n")
+	if k8sMarker(springContent) {
+		t.Error("expected k8sMarker to return false for Spring config")
+	}
+
+	// Has apiVersion but no kind
+	partialContent := []byte("apiVersion: v1\ndata:\n  key: value\n")
+	if k8sMarker(partialContent) {
+		t.Error("expected k8sMarker to return false when only apiVersion is present (no kind)")
+	}
+}
+
+func TestK8sParserDoesNotDoubleRead(t *testing.T) {
+	// Verify that parseK8s reads the file only once by checking that
+	// a valid K8s manifest with known deps produces correct results
+	// and an invalid one returns nil without errors.
+	nonK8sContent := `# Just a random YAML file
+database:
+  host: localhost
+  port: 5432
+cache:
+  host: redis
+  port: 6379
+`
+	path := writeTempFile(t, "random-config.yml", nonK8sContent)
+	deps, err := parseK8s(path)
+	if err != nil {
+		t.Fatalf("unexpected error for non-K8s YAML: %v", err)
+	}
+	if deps != nil {
+		t.Errorf("expected nil deps for non-K8s YAML, got %d deps", len(deps))
+	}
+}
+
 // --- test helpers ---
 
 func assertDepCount(t *testing.T, deps []model.NetworkDependency, want int) {

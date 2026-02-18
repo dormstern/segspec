@@ -25,8 +25,9 @@ func TestNetworkPolicyBasic(t *testing.T) {
 		"Egress",
 		"port: 5432",
 		"protocol: TCP",
-		"port: 53",   // DNS
-		"protocol: UDP", // DNS UDP
+		"port: 53",      // DNS
+		"protocol: UDP",  // DNS UDP
+		"app: postgres",  // Fix 1: proper destination selector
 	}
 
 	for _, check := range checks {
@@ -95,6 +96,14 @@ func TestSanitizeName(t *testing.T) {
 		{"app_v2.0", "app-v2-0"},
 		{"---leading---", "leading"},
 		{"UPPERCASE", "uppercase"},
+		// Fix 3: edge cases
+		{"___", "unknown"},
+		{"...", "unknown"},
+		{"", "unknown"},
+		{strings.Repeat("a", 100), strings.Repeat("a", 63)},
+		// Trailing hyphens after truncation: 62 a's + "-b" = 64 chars, truncated to 63 = 62 a's + "-", then trim trailing hyphen
+		{strings.Repeat("a", 62) + "-b", strings.Repeat("a", 62)},
+		{strings.Repeat("a", 62) + "--", strings.Repeat("a", 62)},
 	}
 
 	for _, tt := range tests {
@@ -104,5 +113,158 @@ func TestSanitizeName(t *testing.T) {
 				t.Errorf("sanitizeName(%q) = %q, want %q", tt.input, got, tt.want)
 			}
 		})
+	}
+}
+
+// Fix 1: Egress rules must have destination selectors
+func TestNetworkPolicyEgressDestinationSelectors(t *testing.T) {
+	ds := model.NewDependencySet("web")
+	ds.Add(model.NetworkDependency{Source: "web", Target: "postgres", Port: 5432, Protocol: "TCP"})
+
+	out := NetworkPolicy(ds)
+
+	// Should have a podSelector for the target, not just a comment
+	if !strings.Contains(out, "podSelector:") {
+		t.Error("egress rule should have podSelector for simple service target")
+	}
+	if !strings.Contains(out, "app: postgres") {
+		t.Errorf("egress rule should have matchLabels app: postgres, got:\n%s", out)
+	}
+	// Should have the review comment
+	if !strings.Contains(out, "# Review: verify podSelector labels match your deployment") {
+		t.Error("missing review comment above generated policy")
+	}
+}
+
+func TestNetworkPolicyEgressIPTarget(t *testing.T) {
+	ds := model.NewDependencySet("web")
+	ds.Add(model.NetworkDependency{Source: "web", Target: "10.0.1.5", Port: 443, Protocol: "TCP"})
+
+	out := NetworkPolicy(ds)
+
+	if !strings.Contains(out, "ipBlock:") {
+		t.Error("IP target should use ipBlock")
+	}
+	if !strings.Contains(out, "cidr: 10.0.1.5/32") {
+		t.Errorf("IP target should have cidr with /32, got:\n%s", out)
+	}
+}
+
+func TestNetworkPolicyEgressFQDNTarget(t *testing.T) {
+	ds := model.NewDependencySet("web")
+	ds.Add(model.NetworkDependency{Source: "web", Target: "mydb.production.svc.cluster.local", Port: 5432, Protocol: "TCP"})
+
+	out := NetworkPolicy(ds)
+
+	if !strings.Contains(out, "podSelector:") {
+		t.Error("FQDN target should use podSelector")
+	}
+	if !strings.Contains(out, "app: mydb") {
+		t.Errorf("FQDN target should extract service name, got:\n%s", out)
+	}
+	if !strings.Contains(out, "namespaceSelector:") {
+		t.Error("FQDN target should use namespaceSelector")
+	}
+	if !strings.Contains(out, "kubernetes.io/metadata.name: production") {
+		t.Errorf("FQDN target should extract namespace, got:\n%s", out)
+	}
+}
+
+func TestNetworkPolicyDNSRestricted(t *testing.T) {
+	ds := model.NewDependencySet("app")
+	ds.Add(model.NetworkDependency{Source: "app", Target: "db", Port: 3306, Protocol: "TCP"})
+
+	out := NetworkPolicy(ds)
+
+	// DNS egress should be restricted to kube-system namespace
+	if !strings.Contains(out, "kubernetes.io/metadata.name: kube-system") {
+		t.Error("DNS egress should be restricted to kube-system namespace")
+	}
+}
+
+// Fix 2: Port 0 should be skipped
+func TestNetworkPolicySkipsPortZero(t *testing.T) {
+	ds := model.NewDependencySet("web")
+	ds.Add(model.NetworkDependency{Source: "web", Target: "unknown-svc", Port: 0, Protocol: "TCP"})
+	ds.Add(model.NetworkDependency{Source: "web", Target: "redis", Port: 6379, Protocol: "TCP"})
+
+	out := NetworkPolicy(ds)
+
+	if strings.Contains(out, "port: 0") {
+		t.Error("port 0 should not appear in output")
+	}
+	if !strings.Contains(out, "port: 6379") {
+		t.Error("valid port 6379 should still be present")
+	}
+	if !strings.Contains(out, "# Skipped (no port): unknown-svc") {
+		t.Errorf("should have a comment listing skipped deps, got:\n%s", out)
+	}
+}
+
+func TestNetworkPolicySkipsNegativePort(t *testing.T) {
+	ds := model.NewDependencySet("web")
+	ds.Add(model.NetworkDependency{Source: "web", Target: "bad-svc", Port: -1, Protocol: "TCP"})
+	ds.Add(model.NetworkDependency{Source: "web", Target: "redis", Port: 6379, Protocol: "TCP"})
+
+	out := NetworkPolicy(ds)
+
+	if strings.Contains(out, "port: -1") {
+		t.Error("negative port should not appear in output")
+	}
+	if !strings.Contains(out, "# Skipped (no port): bad-svc") {
+		t.Errorf("should list skipped dep, got:\n%s", out)
+	}
+}
+
+func TestNetworkPolicyAllDepsSkipped(t *testing.T) {
+	ds := model.NewDependencySet("web")
+	ds.Add(model.NetworkDependency{Source: "web", Target: "svc-a", Port: 0, Protocol: "TCP"})
+	ds.Add(model.NetworkDependency{Source: "web", Target: "svc-b", Port: 0, Protocol: "TCP"})
+
+	out := NetworkPolicy(ds)
+
+	// Should still produce output (default deny + DNS) even if all deps skipped
+	if out == "" {
+		t.Error("should produce output even when all deps are skipped (default deny + DNS)")
+	}
+	if !strings.Contains(out, "# Skipped (no port): svc-a, svc-b") {
+		t.Errorf("should list all skipped deps, got:\n%s", out)
+	}
+}
+
+// Fix 4: Default deny + ingress policies
+func TestNetworkPolicyDefaultDeny(t *testing.T) {
+	ds := model.NewDependencySet("web")
+	ds.Add(model.NetworkDependency{Source: "web", Target: "db", Port: 5432, Protocol: "TCP"})
+
+	out := NetworkPolicy(ds)
+
+	// Should contain a default-deny policy
+	if !strings.Contains(out, "# Default deny policy") {
+		t.Error("should contain a default deny policy comment")
+	}
+	// The default deny policy should block both ingress and egress
+	if !strings.Contains(out, "- Ingress") {
+		t.Error("default deny should include Ingress policyType")
+	}
+	if !strings.Contains(out, "- Egress") {
+		t.Error("default deny should include Egress policyType")
+	}
+}
+
+func TestNetworkPolicyTwoPolicies(t *testing.T) {
+	ds := model.NewDependencySet("web")
+	ds.Add(model.NetworkDependency{Source: "web", Target: "db", Port: 5432, Protocol: "TCP"})
+
+	out := NetworkPolicy(ds)
+
+	// Should contain two separate NetworkPolicy documents (separated by ---)
+	count := strings.Count(out, "kind: NetworkPolicy")
+	if count != 2 {
+		t.Errorf("expected 2 NetworkPolicy documents, got %d:\n%s", count, out)
+	}
+	// Should have YAML document separator
+	if !strings.Contains(out, "---") {
+		t.Error("multiple policies should be separated by ---")
 	}
 }

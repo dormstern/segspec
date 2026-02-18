@@ -2,21 +2,24 @@ package renderer
 
 import (
 	"fmt"
+	"net"
+	"sort"
 	"strings"
 
 	"github.com/dormorgenstern/segspec/internal/model"
 )
 
 // NetworkPolicy renders Kubernetes NetworkPolicy YAML from dependencies.
+// It generates two policies:
+// 1. A default-deny policy (blocks all ingress and egress)
+// 2. An allow policy for known egress destinations with proper selectors
 func NetworkPolicy(ds *model.DependencySet) string {
 	deps := ds.Dependencies()
 	if len(deps) == 0 {
 		return ""
 	}
 
-	var b strings.Builder
-
-	// Group egress rules by target:port
+	// Group egress rules by target:port, skipping invalid ports (Fix 2)
 	type egressRule struct {
 		target   string
 		port     int
@@ -24,7 +27,12 @@ func NetworkPolicy(ds *model.DependencySet) string {
 	}
 	rules := make([]egressRule, 0, len(deps))
 	seen := make(map[string]bool)
+	var skipped []string
 	for _, dep := range deps {
+		if dep.Port <= 0 {
+			skipped = append(skipped, dep.Target)
+			continue
+		}
 		key := fmt.Sprintf("%s:%d:%s", dep.Target, dep.Port, dep.Protocol)
 		if !seen[key] {
 			seen[key] = true
@@ -32,41 +40,112 @@ func NetworkPolicy(ds *model.DependencySet) string {
 		}
 	}
 
-	// Render NetworkPolicy
+	// Deduplicate and sort skipped targets for deterministic output
+	skipped = dedupeStrings(skipped)
+
+	svcName := sanitizeName(ds.ServiceName)
+
+	var b strings.Builder
+
+	// --- Policy 1: Default deny (both ingress and egress) --- (Fix 4)
+	// Review: verify podSelector labels match your deployment
+	fmt.Fprintf(&b, "# Review: verify podSelector labels match your deployment\n")
 	fmt.Fprintf(&b, "apiVersion: networking.k8s.io/v1\n")
 	fmt.Fprintf(&b, "kind: NetworkPolicy\n")
 	fmt.Fprintf(&b, "metadata:\n")
-	fmt.Fprintf(&b, "  name: %s-egress\n", sanitizeName(ds.ServiceName))
+	fmt.Fprintf(&b, "  name: %s-default-deny\n", svcName)
 	fmt.Fprintf(&b, "  labels:\n")
 	fmt.Fprintf(&b, "    generated-by: segspec\n")
 	fmt.Fprintf(&b, "spec:\n")
 	fmt.Fprintf(&b, "  podSelector:\n")
 	fmt.Fprintf(&b, "    matchLabels:\n")
-	fmt.Fprintf(&b, "      app: %s\n", sanitizeName(ds.ServiceName))
+	fmt.Fprintf(&b, "      app: %s\n", svcName)
+	fmt.Fprintf(&b, "  policyTypes:\n")
+	fmt.Fprintf(&b, "    - Ingress\n")
+	fmt.Fprintf(&b, "    - Egress\n")
+	fmt.Fprintf(&b, "# Default deny policy — blocks all traffic not explicitly allowed above\n")
+
+	// --- Policy 2: Allow egress rules ---
+	fmt.Fprintf(&b, "---\n")
+	fmt.Fprintf(&b, "apiVersion: networking.k8s.io/v1\n")
+	fmt.Fprintf(&b, "kind: NetworkPolicy\n")
+	fmt.Fprintf(&b, "metadata:\n")
+	fmt.Fprintf(&b, "  name: %s-egress\n", svcName)
+	fmt.Fprintf(&b, "  labels:\n")
+	fmt.Fprintf(&b, "    generated-by: segspec\n")
+	fmt.Fprintf(&b, "spec:\n")
+	fmt.Fprintf(&b, "  podSelector:\n")
+	fmt.Fprintf(&b, "    matchLabels:\n")
+	fmt.Fprintf(&b, "      app: %s\n", svcName)
 	fmt.Fprintf(&b, "  policyTypes:\n")
 	fmt.Fprintf(&b, "    - Egress\n")
 	fmt.Fprintf(&b, "  egress:\n")
 
+	// Render each egress rule with proper destination selectors (Fix 1)
 	for _, rule := range rules {
 		proto := strings.ToUpper(rule.protocol)
 		if proto == "" {
 			proto = "TCP"
 		}
-		fmt.Fprintf(&b, "    - to: # %s\n", rule.target)
+		renderEgressTo(&b, rule.target)
 		fmt.Fprintf(&b, "      ports:\n")
 		fmt.Fprintf(&b, "        - port: %d\n", rule.port)
 		fmt.Fprintf(&b, "          protocol: %s\n", proto)
 	}
 
-	// Also render DNS egress (port 53) — almost always needed
-	fmt.Fprintf(&b, "    - to: # DNS\n")
+	// DNS egress (port 53) restricted to kube-system namespace (Fix 1)
+	fmt.Fprintf(&b, "    - to:\n")
+	fmt.Fprintf(&b, "        - namespaceSelector:\n")
+	fmt.Fprintf(&b, "            matchLabels:\n")
+	fmt.Fprintf(&b, "              kubernetes.io/metadata.name: kube-system\n")
 	fmt.Fprintf(&b, "      ports:\n")
 	fmt.Fprintf(&b, "        - port: 53\n")
 	fmt.Fprintf(&b, "          protocol: UDP\n")
 	fmt.Fprintf(&b, "        - port: 53\n")
 	fmt.Fprintf(&b, "          protocol: TCP\n")
 
+	// Append comment listing skipped dependencies (Fix 2)
+	if len(skipped) > 0 {
+		fmt.Fprintf(&b, "# Skipped (no port): %s\n", strings.Join(skipped, ", "))
+	}
+
 	return b.String()
+}
+
+// renderEgressTo writes the appropriate `to:` block for the given target.
+// - Simple service name (no dots, no IP) -> podSelector with app label
+// - FQDN (contains dots, not an IP) -> podSelector + namespaceSelector
+// - IP address -> ipBlock with /32 CIDR
+func renderEgressTo(b *strings.Builder, target string) {
+	if ip := net.ParseIP(target); ip != nil {
+		// IP address target
+		fmt.Fprintf(b, "    - to:\n")
+		fmt.Fprintf(b, "        - ipBlock:\n")
+		fmt.Fprintf(b, "            cidr: %s/32\n", target)
+	} else if strings.Contains(target, ".") {
+		// FQDN target — extract service name and namespace
+		parts := strings.SplitN(target, ".", 3)
+		svcName := parts[0]
+		namespace := ""
+		if len(parts) >= 2 {
+			namespace = parts[1]
+		}
+		fmt.Fprintf(b, "    - to:\n")
+		fmt.Fprintf(b, "        - podSelector:\n")
+		fmt.Fprintf(b, "            matchLabels:\n")
+		fmt.Fprintf(b, "              app: %s\n", svcName)
+		if namespace != "" {
+			fmt.Fprintf(b, "          namespaceSelector:\n")
+			fmt.Fprintf(b, "            matchLabels:\n")
+			fmt.Fprintf(b, "              kubernetes.io/metadata.name: %s\n", namespace)
+		}
+	} else {
+		// Simple service name
+		fmt.Fprintf(b, "    - to:\n")
+		fmt.Fprintf(b, "        - podSelector:\n")
+		fmt.Fprintf(b, "            matchLabels:\n")
+		fmt.Fprintf(b, "              app: %s\n", target)
+	}
 }
 
 // sanitizeName converts a string to a valid K8s resource name.
@@ -82,5 +161,28 @@ func sanitizeName(s string) string {
 	if len(s) > 63 {
 		s = s[:63]
 	}
+	// Fix 3: re-trim trailing hyphens after truncation
+	s = strings.TrimRight(s, "-")
+	// Fix 3: default to "unknown" if empty after sanitization
+	if s == "" {
+		s = "unknown"
+	}
 	return s
+}
+
+// dedupeStrings returns a sorted, deduplicated copy of the input.
+func dedupeStrings(ss []string) []string {
+	if len(ss) == 0 {
+		return nil
+	}
+	seen := make(map[string]bool, len(ss))
+	out := make([]string, 0, len(ss))
+	for _, s := range ss {
+		if !seen[s] {
+			seen[s] = true
+			out = append(out, s)
+		}
+	}
+	sort.Strings(out)
+	return out
 }

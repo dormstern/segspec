@@ -328,6 +328,221 @@ logging:
 	}
 }
 
+// --- Fix 1: JDBC URLs without port ---
+
+func TestParseJDBC_PostgresNoPort(t *testing.T) {
+	dep, ok := parseJDBC("jdbc:postgresql://db-host/mydb", "test.yml")
+	if !ok {
+		t.Fatal("expected parseJDBC to match JDBC URL without port")
+	}
+	if dep.Target != "db-host" {
+		t.Errorf("target = %q, want db-host", dep.Target)
+	}
+	if dep.Port != 5432 {
+		t.Errorf("port = %d, want 5432 (default for postgresql)", dep.Port)
+	}
+	if dep.Confidence != model.Medium {
+		t.Errorf("confidence = %q, want medium (port was inferred)", dep.Confidence)
+	}
+	if dep.Description != "PostgreSQL" {
+		t.Errorf("description = %q, want PostgreSQL", dep.Description)
+	}
+}
+
+func TestParseJDBC_MysqlNoPort(t *testing.T) {
+	dep, ok := parseJDBC("jdbc:mysql://mysql-host/app", "test.yml")
+	if !ok {
+		t.Fatal("expected parseJDBC to match JDBC URL without port")
+	}
+	if dep.Target != "mysql-host" {
+		t.Errorf("target = %q, want mysql-host", dep.Target)
+	}
+	if dep.Port != 3306 {
+		t.Errorf("port = %d, want 3306 (default for mysql)", dep.Port)
+	}
+	if dep.Confidence != model.Medium {
+		t.Errorf("confidence = %q, want medium (port was inferred)", dep.Confidence)
+	}
+}
+
+func TestParseJDBC_H2MemSkipped(t *testing.T) {
+	_, ok := parseJDBC("jdbc:h2:mem:testdb", "test.yml")
+	if ok {
+		t.Fatal("expected h2:mem to be skipped (in-memory DB, not a network dep)")
+	}
+}
+
+func TestParseJDBC_ExplicitPortStillHigh(t *testing.T) {
+	dep, ok := parseJDBC("jdbc:postgresql://db-host:5432/mydb", "test.yml")
+	if !ok {
+		t.Fatal("expected parseJDBC to match")
+	}
+	if dep.Confidence != model.High {
+		t.Errorf("confidence = %q, want high (port was explicit)", dep.Confidence)
+	}
+}
+
+func TestParseJDBC_OracleNoPort(t *testing.T) {
+	dep, ok := parseJDBC("jdbc:oracle://oracle-host/orcl", "test.yml")
+	if !ok {
+		t.Fatal("expected parseJDBC to match JDBC URL without port")
+	}
+	if dep.Port != 1521 {
+		t.Errorf("port = %d, want 1521 (default for oracle)", dep.Port)
+	}
+}
+
+func TestParseJDBC_SqlServerNoPort(t *testing.T) {
+	dep, ok := parseJDBC("jdbc:sqlserver://sql-host/mydb", "test.yml")
+	if !ok {
+		t.Fatal("expected parseJDBC to match JDBC URL without port")
+	}
+	if dep.Port != 1433 {
+		t.Errorf("port = %d, want 1433 (default for sqlserver)", dep.Port)
+	}
+}
+
+func TestParseJDBC_MariadbNoPort(t *testing.T) {
+	dep, ok := parseJDBC("jdbc:mariadb://maria-host/appdb", "test.yml")
+	if !ok {
+		t.Fatal("expected parseJDBC to match JDBC URL without port")
+	}
+	if dep.Port != 3306 {
+		t.Errorf("port = %d, want 3306 (default for mariadb)", dep.Port)
+	}
+}
+
+func TestParseJDBC_DerbySkipped(t *testing.T) {
+	_, ok := parseJDBC("jdbc:derby:memory:testdb;create=true", "test.yml")
+	if ok {
+		t.Fatal("expected derby to be skipped (embedded DB, not a network dep)")
+	}
+}
+
+func TestParseSpringYAML_JDBCNoPort(t *testing.T) {
+	dir := t.TempDir()
+	content := `spring:
+  datasource:
+    url: jdbc:postgresql://db-host/mydb
+`
+	path := filepath.Join(dir, "application.yml")
+	os.WriteFile(path, []byte(content), 0644)
+
+	deps, err := parseSpringYAML(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	found := findDep(deps, "db-host", 5432)
+	if found == nil {
+		t.Fatal("expected dependency on db-host:5432 (default port for postgresql)")
+	}
+	if found.Confidence != model.Medium {
+		t.Errorf("confidence = %q, want medium (port was inferred)", found.Confidence)
+	}
+}
+
+// --- Fix 2: Multi-document YAML (profiles) ---
+
+func TestParseSpringYAML_MultiDocument(t *testing.T) {
+	dir := t.TempDir()
+	content := `spring:
+  datasource:
+    url: jdbc:postgresql://db-default:5432/appdb
+server:
+  port: 8080
+---
+spring:
+  profiles: dev
+  datasource:
+    url: jdbc:postgresql://db-dev:5432/appdb_dev
+  redis:
+    host: redis-dev
+    port: 6379
+---
+spring:
+  profiles: prod
+  datasource:
+    url: jdbc:mysql://db-prod:3306/appdb_prod
+  redis:
+    host: redis-prod
+    port: 6380
+`
+	path := filepath.Join(dir, "application.yml")
+	os.WriteFile(path, []byte(content), 0644)
+
+	deps, err := parseSpringYAML(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Should find deps from ALL documents
+	if findDep(deps, "db-default", 5432) == nil {
+		t.Error("expected dependency on db-default:5432 from first document")
+	}
+	if findDep(deps, "db-dev", 5432) == nil {
+		t.Error("expected dependency on db-dev:5432 from dev profile")
+	}
+	if findDep(deps, "redis-dev", 6379) == nil {
+		t.Error("expected dependency on redis-dev:6379 from dev profile")
+	}
+	if findDep(deps, "db-prod", 3306) == nil {
+		t.Error("expected dependency on db-prod:3306 from prod profile")
+	}
+	if findDep(deps, "redis-prod", 6380) == nil {
+		t.Error("expected dependency on redis-prod:6380 from prod profile")
+	}
+	if findDep(deps, "self", 8080) == nil {
+		t.Error("expected server port 8080 from first document")
+	}
+}
+
+func TestParseSpringYAML_SpringBoot3RedisKey(t *testing.T) {
+	dir := t.TempDir()
+	content := `spring:
+  data:
+    redis:
+      host: redis-boot3
+      port: 6379
+`
+	path := filepath.Join(dir, "application.yml")
+	os.WriteFile(path, []byte(content), 0644)
+
+	deps, err := parseSpringYAML(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	found := findDep(deps, "redis-boot3", 6379)
+	if found == nil {
+		t.Fatal("expected dependency on redis-boot3:6379 (Spring Boot 3.x spring.data.redis.host)")
+	}
+	if found.Description != "Redis" {
+		t.Errorf("description = %q, want Redis", found.Description)
+	}
+}
+
+func TestParseSpringYAML_SpringBoot3RedisDefaultPort(t *testing.T) {
+	dir := t.TempDir()
+	content := `spring:
+  data:
+    redis:
+      host: redis-boot3-noport
+`
+	path := filepath.Join(dir, "application.yml")
+	os.WriteFile(path, []byte(content), 0644)
+
+	deps, err := parseSpringYAML(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	found := findDep(deps, "redis-boot3-noport", 6379)
+	if found == nil {
+		t.Fatal("expected dependency on redis-boot3-noport:6379 (default port)")
+	}
+}
+
 // findDep is a test helper that finds a dependency by target and port.
 func findDep(deps []model.NetworkDependency, target string, port int) *model.NetworkDependency {
 	for i := range deps {

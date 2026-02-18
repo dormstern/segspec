@@ -1,6 +1,7 @@
 package walker
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -24,7 +25,7 @@ func TestWalkFindsMatchingFiles(t *testing.T) {
 		}, nil
 	})
 
-	ds, err := Walk(dir, r)
+	ds, _, err := Walk(dir, r)
 	if err != nil {
 		t.Fatalf("Walk() error: %v", err)
 	}
@@ -47,7 +48,7 @@ func TestWalkSetsSourceFromDirName(t *testing.T) {
 		}, nil
 	})
 
-	ds, err := Walk(dir, r)
+	ds, _, err := Walk(dir, r)
 	if err != nil {
 		t.Fatalf("Walk() error: %v", err)
 	}
@@ -107,11 +108,75 @@ func TestWalkEmptyDir(t *testing.T) {
 		return nil, nil
 	})
 
-	ds, err := Walk(dir, r)
+	ds, warnings, err := Walk(dir, r)
 	if err != nil {
 		t.Fatalf("Walk() error: %v", err)
 	}
 	if ds.Len() != 0 {
 		t.Errorf("Len() = %d for empty dir, want 0", ds.Len())
+	}
+	if len(warnings) != 0 {
+		t.Errorf("expected no warnings for empty dir, got %d", len(warnings))
+	}
+}
+
+func TestWalkReturnsWarningsForParseErrors(t *testing.T) {
+	dir := t.TempDir()
+
+	// Write a "malformed" YAML file that the parser will fail on.
+	os.WriteFile(filepath.Join(dir, "bad.yml"), []byte("{{{{invalid yaml"), 0644)
+
+	// Also write a good file that succeeds.
+	os.WriteFile(filepath.Join(dir, "good.yml"), []byte("valid: true"), 0644)
+
+	r := parser.NewRegistry()
+	r.Register("*.yml", func(path string) ([]model.NetworkDependency, error) {
+		if filepath.Base(path) == "bad.yml" {
+			return nil, fmt.Errorf("YAML parse error: invalid syntax")
+		}
+		return []model.NetworkDependency{
+			{Target: "redis", Port: 6379, Protocol: "TCP", Confidence: model.High},
+		}, nil
+	})
+
+	ds, warnings, err := Walk(dir, r)
+	if err != nil {
+		t.Fatalf("Walk() fatal error: %v", err)
+	}
+
+	// The good file should still produce results.
+	if ds.Len() != 1 {
+		t.Errorf("Len() = %d, want 1 (good.yml should still parse)", ds.Len())
+	}
+
+	// We should get exactly 1 warning for bad.yml.
+	if len(warnings) != 1 {
+		t.Fatalf("expected 1 warning, got %d", len(warnings))
+	}
+	if warnings[0].File != "bad.yml" {
+		t.Errorf("warning File = %q, want %q", warnings[0].File, "bad.yml")
+	}
+	if warnings[0].Err == nil {
+		t.Error("warning Err should not be nil")
+	}
+}
+
+func TestWalkNoWarningsWhenAllFilesParse(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "app.yml"), []byte("test"), 0644)
+
+	r := parser.NewRegistry()
+	r.Register("*.yml", func(path string) ([]model.NetworkDependency, error) {
+		return []model.NetworkDependency{
+			{Target: "postgres", Port: 5432, Protocol: "TCP", Confidence: model.High},
+		}, nil
+	})
+
+	_, warnings, err := Walk(dir, r)
+	if err != nil {
+		t.Fatalf("Walk() error: %v", err)
+	}
+	if len(warnings) != 0 {
+		t.Errorf("expected 0 warnings, got %d", len(warnings))
 	}
 }

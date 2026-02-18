@@ -1,10 +1,13 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -53,11 +56,24 @@ func init() {
 }
 
 // isGitHubURL reports whether arg looks like a GitHub repository URL.
+// It uses proper URL parsing to prevent domain-spoofing attacks like
+// github.com.evil.com or evil.github.com.
 func isGitHubURL(arg string) bool {
-	lower := strings.ToLower(arg)
-	return strings.HasPrefix(lower, "https://github.com/") ||
-		strings.HasPrefix(lower, "http://github.com/") ||
-		strings.HasPrefix(lower, "github.com/")
+	raw := arg
+	// Handle schemeless case: prepend https:// so url.Parse treats the
+	// first component as a host rather than a path.
+	lower := strings.ToLower(raw)
+	if !strings.HasPrefix(lower, "http://") && !strings.HasPrefix(lower, "https://") {
+		raw = "https://" + raw
+	}
+
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return false
+	}
+
+	host := strings.ToLower(u.Hostname())
+	return host == "github.com"
 }
 
 // normalizeGitHubURL ensures the URL has an https:// scheme.
@@ -71,16 +87,23 @@ func normalizeGitHubURL(raw string) string {
 
 // cloneRepo shallow-clones the given git URL into a temp directory and
 // returns the directory path. The caller is responsible for removing it.
+// A 60-second timeout prevents hanging on unresponsive git servers.
 func cloneRepo(url string) (string, error) {
 	tmpDir, err := os.MkdirTemp("", "segspec-clone-*")
 	if err != nil {
 		return "", fmt.Errorf("failed to create temp directory: %w", err)
 	}
 
-	gitCmd := exec.Command("git", "clone", "--depth", "1", url, tmpDir)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	gitCmd := exec.CommandContext(ctx, "git", "clone", "--depth", "1", url, tmpDir)
 	gitCmd.Stderr = os.Stderr
 	if err := gitCmd.Run(); err != nil {
 		os.RemoveAll(tmpDir)
+		if ctx.Err() == context.DeadlineExceeded {
+			return "", fmt.Errorf("git clone timed out after 60 seconds: %w", err)
+		}
 		return "", fmt.Errorf("git clone failed: %w", err)
 	}
 	return tmpDir, nil
@@ -111,9 +134,12 @@ func runAnalyze(cmd *cobra.Command, args []string) error {
 
 	registry := parser.DefaultRegistry()
 
-	ds, err := walker.Walk(path, registry)
+	ds, warnings, err := walker.Walk(path, registry)
 	if err != nil {
 		return fmt.Errorf("analysis failed: %w", err)
+	}
+	if len(warnings) > 0 {
+		fmt.Fprintf(os.Stderr, "Warning: %d file(s) could not be parsed (use --verbose for details)\n", len(warnings))
 	}
 
 	if aiProvider != "" {

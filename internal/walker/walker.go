@@ -18,11 +18,21 @@ var skippedDirs = map[string]bool{
 	"__pycache__":  true,
 }
 
+// WalkWarning represents a non-fatal error encountered while walking.
+// Typically this is a per-file parse failure.
+type WalkWarning struct {
+	File string
+	Err  error
+}
+
 // Walk recursively scans root for files matching registered parsers,
 // collects all discovered network dependencies, and returns them as a DependencySet.
-func Walk(root string, registry *parser.Registry) (*model.DependencySet, error) {
+// Per-file parse failures are returned as warnings (not fatal errors).
+// The error return is reserved for fatal errors such as inability to walk the directory.
+func Walk(root string, registry *parser.Registry) (*model.DependencySet, []WalkWarning, error) {
 	serviceName := filepath.Base(root)
 	ds := model.NewDependencySet(serviceName)
+	var warnings []WalkWarning
 
 	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
@@ -39,7 +49,12 @@ func Walk(root string, registry *parser.Registry) (*model.DependencySet, error) 
 		for _, fn := range parsers {
 			deps, parseErr := fn(path)
 			if parseErr != nil {
-				continue // skip unparseable files
+				relPath, relErr := filepath.Rel(root, path)
+				if relErr != nil {
+					relPath = path
+				}
+				warnings = append(warnings, WalkWarning{File: relPath, Err: parseErr})
+				continue
 			}
 			for i := range deps {
 				if deps[i].Source == "" {
@@ -51,5 +66,5 @@ func Walk(root string, registry *parser.Registry) (*model.DependencySet, error) 
 		return nil
 	})
 
-	return ds, err
+	return ds, warnings, err
 }

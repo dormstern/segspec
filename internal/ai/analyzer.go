@@ -8,7 +8,9 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
+	"time"
 
 	"github.com/dormorgenstern/segspec/internal/model"
 )
@@ -94,10 +96,15 @@ type ollamaModelEntry struct {
 	Name string `json:"name"`
 }
 
-// httpClient allows overriding the HTTP client for testing.
-var httpClient interface {
+// HTTPClient is the interface used for HTTP requests, allowing test mocks.
+type HTTPClient interface {
 	Do(req *http.Request) (*http.Response, error)
-} = http.DefaultClient
+}
+
+// httpClient allows overriding the HTTP client for testing.
+// The default client has a 30-second timeout to prevent hanging on
+// unresponsive Ollama or Gemini endpoints.
+var httpClient HTTPClient = &http.Client{Timeout: 30 * time.Second}
 
 // geminiRequest is the Gemini generateContent API request body.
 type geminiRequest struct {
@@ -217,6 +224,7 @@ func analyzeLocal(files []fileEntry, serviceName string, existingKeys map[string
 
 // analyzeCloud sends all files to Gemini Flash in a single request.
 func analyzeCloud(files []fileEntry, serviceName string, existingKeys map[string]bool) ([]model.NetworkDependency, error) {
+	fmt.Fprintln(os.Stderr, "Note: config files will be sent to Google Gemini API. Use --ai local for fully offline analysis.")
 	prompt := buildGeminiPrompt(files)
 	responseText, err := callGemini(os.Getenv("GEMINI_API_KEY"), prompt)
 	if err != nil {
@@ -427,7 +435,7 @@ Return ONLY a JSON array. No explanation, no markdown fences.
 
 `)
 	for _, f := range files {
-		sb.WriteString(fmt.Sprintf("--- file: %s ---\n%s\n\n", f.Path, f.Content))
+		sb.WriteString(fmt.Sprintf("--- file: %s ---\n%s\n\n", f.Path, redactSecrets(f.Content)))
 	}
 	return sb.String()
 }
@@ -445,12 +453,12 @@ func callGemini(apiKey string, prompt string) (string, error) {
 		return "", fmt.Errorf("marshaling request: %w", err)
 	}
 
-	url := geminiURL + "?key=" + apiKey
-	req, err := http.NewRequest("POST", url, bytes.NewReader(bodyBytes))
+	req, err := http.NewRequest("POST", geminiURL, bytes.NewReader(bodyBytes))
 	if err != nil {
 		return "", fmt.Errorf("creating request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("x-goog-api-key", apiKey)
 
 	resp, err := httpClient.Do(req)
 	if err != nil {
@@ -521,6 +529,32 @@ func parseResponse(text string, serviceName string) ([]model.NetworkDependency, 
 	}
 
 	return deps, nil
+}
+
+// secretKeyPattern matches key=value or key: value lines where the key
+// suggests a secret (password, token, secret, api_key, apikey, AWS creds).
+// It captures: (key)(separator)(value)
+var secretKeyPattern = regexp.MustCompile(
+	`(?i)((?:password|passwd|secret|token|api_key|apikey|` +
+		`AWS_SECRET_ACCESS_KEY|AWS_SESSION_TOKEN)` +
+		`)([=: ]+)(.+)`)
+
+// jwtPattern matches JWT tokens (eyJ...) anywhere in the text.
+var jwtPattern = regexp.MustCompile(`eyJ[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+){1,2}`)
+
+// wellKnownKeyPattern matches well-known API key prefixes.
+var wellKnownKeyPattern = regexp.MustCompile(`\b(sk-[A-Za-z0-9]{10,}|AKIA[A-Z0-9]{12,}|ghp_[A-Za-z0-9]{20,}|gho_[A-Za-z0-9]{20,})`)
+
+// redactSecrets replaces likely secret values with [REDACTED], keeping keys
+// visible so the AI can still understand config structure.
+func redactSecrets(content string) string {
+	// First, redact key=value / key: value patterns for known secret keys.
+	content = secretKeyPattern.ReplaceAllString(content, "${1}${2}[REDACTED]")
+	// Then redact JWTs anywhere in the text.
+	content = jwtPattern.ReplaceAllString(content, "[REDACTED]")
+	// Then redact well-known API key prefixes.
+	content = wellKnownKeyPattern.ReplaceAllString(content, "[REDACTED]")
+	return content
 }
 
 // truncate shortens a string to max length for error messages.

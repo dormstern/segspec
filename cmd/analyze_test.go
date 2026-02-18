@@ -199,6 +199,13 @@ func TestIsGitHubURL(t *testing.T) {
 		{"https://gitlab.com/org/repo", false},
 		{"https://bitbucket.org/org/repo", false},
 		{"https://example.com/github.com/org/repo", false},
+
+		// Negative cases — domain spoofing
+		{"github.com.evil.com/org/repo", false},
+		{"https://github.com.evil.com/org/repo", false},
+		{"evil.github.com/org/repo", false},
+		{"https://evil.github.com/org/repo", false},
+		{"http://github.com.attacker.com/org/repo", false},
 	}
 
 	for _, tt := range tests {
