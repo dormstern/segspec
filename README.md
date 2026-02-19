@@ -52,17 +52,47 @@ segspec analyze https://github.com/GoogleCloudPlatform/microservices-demo --form
 kubectl apply -f ./networkpolicies
 ```
 
-## Example: Google Online Boutique
+## Real-world results
 
-- Dependencies discovered: 34
-- Time: 0.8s (local machine)
-- Policies: per service ingress + egress
+We scanned real production apps -- not demos -- to show what segspec finds in software thousands of companies actually run.
 
-## Roadmap / feedback
+### Sentry self-hosted (70+ services)
 
-- More config formats
-- Confidence scoring
-- Policy enrichment plugins
+[getsentry/self-hosted](https://github.com/getsentry/self-hosted) -- the most popular open-source error monitoring platform.
+
+![Sentry scan](docs/demos/sentry-scan.gif)
+
+| Metric | Result |
+|--------|--------|
+| Dependencies found | 411 |
+| NetworkPolicies generated | 71 |
+| Scan time | 11ms |
+| Infrastructure | Kafka, Redis, Memcached, PostgreSQL, ClickHouse, Snuba, Symbolicator |
+
+### PostHog (25+ services)
+
+[PostHog/posthog](https://github.com/PostHog/posthog) -- open-source product analytics used by 100K+ teams.
+
+![PostHog scan](docs/demos/posthog-scan.gif)
+
+| Metric | Result |
+|--------|--------|
+| Dependencies found | 23 |
+| NetworkPolicies generated | 12 |
+| Scan time | 128ms |
+| Infrastructure | Kafka, Redis, PostgreSQL, Redpanda, MinIO |
+
+### Google Online Boutique (11 services)
+
+[GoogleCloudPlatform/microservices-demo](https://github.com/GoogleCloudPlatform/microservices-demo) -- Google's microservices reference architecture.
+
+- 34 dependencies found in under 1 second
+- Entire service mesh mapped at high confidence, zero false positives
+
+## Roadmap
+
+- GitHub Action -- `uses: dormstern/segspec-action@v1`
+- Multi-format output -- AWS Security Groups, Cilium, Calico
 
 ---
 
