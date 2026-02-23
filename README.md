@@ -1,6 +1,6 @@
 # segspec
 
-**From app configs to Kubernetes NetworkPolicies in seconds.**
+**Extract network dependencies from app configs. Generate Kubernetes NetworkPolicies. Diff changes in CI.**
 
 [![Go](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go)](https://go.dev)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
@@ -8,76 +8,81 @@
 
 ---
 
-Microsegmentation is the #1 defense against lateral movement. CISA mandates it. Every CISO wants it. **Yet only 5% of organizations actually enforce it** -- because generating network policies takes 4-8 weeks per app, costs $50K+ in engineering hours, and requires three teams to coordinate simultaneously.
+segspec reads your application config files -- Spring, Docker Compose, Kubernetes, Helm, .env, Maven/Gradle -- and maps every network dependency. Each one is traced to the exact config line that declared it. Output as a summary, evidence report, JSON, or ready-to-apply NetworkPolicy YAML.
 
-segspec reads your application config files and generates ready-to-apply Kubernetes NetworkPolicy YAML. No agents. No runtime access. No observation period.
+```bash
+segspec analyze https://github.com/getsentry/self-hosted --format evidence
+```
 
-## What It Does
+411 dependencies from Sentry's 70+ services in 11ms. Each one linked to the config line that created it.
 
-Point segspec at any application repository. It extracts every network dependency -- databases, caches, message brokers, APIs, service-to-service calls -- from config files and outputs per-service NetworkPolicies with both ingress and egress rules.
+## See It In Action
 
-**Supported config types:**
+![Evidence demo](docs/demos/evidence-demo.gif)
 
-| Type | Files |
-|------|-------|
-| Spring Boot | `application.yml`, `application.properties` |
-| Docker Compose | `docker-compose.yml` |
-| Kubernetes | Deployments, Services, ConfigMaps |
-| Helm Charts | `Chart.yaml` + templates (auto-detected, rendered via `helm template`) |
-| Environment | `.env` files |
-| Build | `pom.xml`, `build.gradle` |
+No agents, no runtime access, no observation period. Works offline.
 
-## Quick Start
-
-**Install:**
+## Install
 
 ```bash
 go install github.com/dormstern/segspec@latest
 ```
 
-Or download the binary:
+Or grab the binary:
 
 ```bash
 curl -fsSL https://github.com/dormstern/segspec/releases/latest/download/segspec-$(uname -s | tr '[:upper:]' '[:lower:]')-$(uname -m) -o /usr/local/bin/segspec
 chmod +x /usr/local/bin/segspec
 ```
 
-**Run:**
+## Usage
 
 ```bash
-# Scan a local directory
+# Scan a local directory or GitHub URL
 segspec analyze ./your-app
-
-# Or point at a GitHub URL directly
 segspec analyze https://github.com/org/repo
 
-# Generate per-service policies with ingress + egress
+# Show evidence -- the exact config line behind each dependency
+segspec analyze ./your-app --format evidence
+
+# Generate per-service NetworkPolicies (ingress + egress)
 segspec analyze ./your-app --format per-service
 
-# Review dependencies interactively before generating
-segspec analyze ./your-app --interactive
+# JSON output for scripting or as a diff baseline
+segspec analyze ./your-app --format json -o baseline.json
 
-# Combine everything: AI + interactive review + per-service output
-segspec analyze ./your-app --ai -i --format per-service
+# Diff against a baseline -- use --exit-code in CI to block on changes
+segspec diff baseline.json ./your-app --exit-code
 ```
 
-No cluster access, no cloud credentials, no running application. It works offline.
+## What Happens When Something Changes
 
-## Real-World Example
+![Diff demo](docs/demos/diff-demo.gif)
 
-We ran segspec against [Google's Online Boutique](https://github.com/GoogleCloudPlatform/microservices-demo) -- an 11-service microservices reference architecture.
+Someone on your team adds a memcached dependency and removes RabbitMQ. You'd never know -- unless you're diffing:
 
-**Result: 34 network dependencies found in under 1 second.**
+```bash
+segspec diff baseline.json ./your-app
+```
 
-segspec mapped the entire service mesh:
+```
+Network Dependency Changes
+==========================
 
-- `frontend` -> cartservice, checkoutservice, currencyservice, productcatalogservice, recommendationservice, adservice, shippingservice, shoppingassistantservice
-- `checkoutservice` -> cartservice, currencyservice, emailservice, paymentservice, productcatalogservice, shippingservice
-- `cartservice` -> redis-cart:6379
-- `loadgenerator` -> frontend:80
-- Plus all container ports, service ports, and targetPort mappings
+ADDED (2):
+  + your-app → memcached:11211/TCP [medium]
+    Evidence: MEMCACHED_HOST=memcached:11211
+  + memcached → memcached:11211/TCP [high]
+    Evidence: ports: 11211:11211
 
-All at high confidence. Zero false positives.
+REMOVED (1):
+  - your-app → rabbitmq:5672/TCP [high]
+    Was in: src/main/resources/application.yml
+
+UNCHANGED: 13 dependencies
+```
+
+Shows what changed and the config line that caused it -- so reviewers see intent, not a 500-line YAML diff.
 
 ## Output Formats
 
@@ -89,36 +94,65 @@ segspec analyze ./your-app
 
 ```
 Service: your-app
-Dependencies: 12
+Dependencies: 14
 
-  -> postgres-primary:5432/TCP  [high]  PostgreSQL
-     source: your-app/src/main/resources/application.yml
-  -> redis-cache:6379/TCP       [high]  Redis
-     source: your-app/docker-compose.yml
-  -> kafka-broker:9092/TCP      [high]  Kafka
-     source: your-app/src/main/resources/application.yml
+  → postgres-primary:5432/TCP  [high]  PostgreSQL
+    source: src/main/resources/application.yml
+  → redis-cache:6379/TCP       [high]  Redis
+    source: docker-compose.yml
+  → kafka-broker:9092/TCP      [high]  Kafka
+    source: src/main/resources/application.yml
 
-Confidence: 10 high, 1 medium, 1 low
+Confidence: 10 high, 4 medium, 0 low
 ```
 
-### NetworkPolicy YAML (single app)
+### Evidence Report
 
 ```bash
-segspec analyze ./your-app --format netpol > network-policy.yaml
+segspec analyze ./your-app --format evidence
 ```
 
-Generates a default-deny policy + egress allow rules for one application.
+Every dependency with the exact config line that declared it. Useful for security reviews and compliance audits.
 
-### Per-Service Policies (recommended for multi-service repos)
+### JSON
 
 ```bash
-segspec analyze ./your-app --format per-service > policies.yaml
+segspec analyze ./your-app --format json -o deps.json
 ```
 
-Generates one NetworkPolicy **per service** with both ingress and egress rules. This is what you want for real microsegmentation -- every service gets its own policy defining exactly who can talk to it and what it can talk to.
+```json
+{
+  "service": "your-app",
+  "generated": "2026-02-23",
+  "version": "0.5.0",
+  "dependencies": [
+    {
+      "source": "your-app",
+      "target": "postgres-primary",
+      "port": 5432,
+      "protocol": "TCP",
+      "description": "PostgreSQL",
+      "confidence": "high",
+      "source_file": "src/main/resources/application.yml",
+      "evidence_line": "spring.datasource.url: jdbc:postgresql://postgres-primary:5432/myapp"
+    }
+  ]
+}
+```
+
+Machine-readable. Use as a diff baseline, pipe into your own tooling, or feed to your CMDB.
+
+### NetworkPolicy YAML
+
+```bash
+segspec analyze ./your-app --format netpol > policy.yaml         # single app
+segspec analyze ./your-app --format per-service > policies.yaml   # per service (recommended)
+```
+
+Per-service generates one NetworkPolicy per service with both ingress and egress rules. Each service gets its own policy.
 
 <details>
-<summary>Example: per-service output for a frontend + cartservice + redis setup</summary>
+<summary>Example: per-service output for frontend + cartservice + redis</summary>
 
 ```yaml
 apiVersion: networking.k8s.io/v1
@@ -194,17 +228,65 @@ spec:
 
 </details>
 
-Apply it:
-
 ```bash
 kubectl apply -f policies.yaml
 ```
 
 Or commit to your GitOps repo and let ArgoCD/Flux handle it.
 
+## Put It In Your Pipeline
+
+### Gate PRs on network changes
+
+Fail the check if network dependencies changed since the last baseline:
+
+```yaml
+# .github/workflows/netpol-diff.yml
+name: Network Policy Drift
+on: [pull_request]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check for network dependency changes
+        run: |
+          curl -fsSL https://github.com/dormstern/segspec/releases/latest/download/segspec-linux-amd64 -o segspec
+          chmod +x segspec
+          ./segspec diff deps-baseline.json . --exit-code
+```
+
+Exit code 1 means something changed. The diff output shows exactly what and the config line that caused it.
+
+### Auto-generate policies on merge
+
+```yaml
+# .github/workflows/netpol.yml
+name: Network Policies
+on:
+  push:
+    branches: [main]
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Generate Network Policies
+        run: |
+          curl -fsSL https://github.com/dormstern/segspec/releases/latest/download/segspec-linux-amd64 -o segspec
+          chmod +x segspec
+          ./segspec analyze . --format per-service > k8s/network-policies.yaml
+      - name: Commit policy
+        run: |
+          git add k8s/network-policies.yaml
+          git diff --cached --quiet || git commit -m "update network policies [segspec]"
+```
+
 ## Interactive Mode
 
-Don't trust the output blindly? Use `--interactive` (or `-i`) to review every dependency before generating YAML:
+Review every dependency before committing to a policy:
 
 ```bash
 segspec analyze ./your-app --interactive --format per-service
@@ -222,110 +304,72 @@ segspec analyze ./your-app --interactive --format per-service
   up/down navigate  SPACE toggle  a all  n none  ENTER generate  q quit
 ```
 
-Navigate with arrow keys or j/k, toggle with space, press Enter to generate from only the selected dependencies. Low-confidence AI discoveries are visually distinct so you know what to double-check.
+Toggle with space, press Enter to generate from only what you've approved.
 
-## Helm Chart Support
+## What It Reads
 
-segspec auto-detects Helm charts (directories with `Chart.yaml`) and renders them via `helm template` before parsing. No extra flags needed -- just point it at a repo containing Helm charts.
-
-```bash
-# Auto-detects and renders Helm charts
-segspec analyze ./my-helm-app
-
-# Use a specific values file (e.g. production overrides)
-segspec analyze ./my-helm-app --helm-values values-prod.yaml
-```
-
-Requires `helm` to be installed. If helm isn't available, segspec skips chart rendering with a warning and continues analyzing other config files normally.
+| Type | Files | What It Extracts |
+|------|-------|------------------|
+| Spring Boot | `application.yml`, `application.properties` | JDBC URLs, Redis/Kafka/RabbitMQ hosts, custom endpoints |
+| Docker Compose | `docker-compose.yml` | depends_on, linked services, exposed ports, env vars |
+| Kubernetes | Deployments, Services, ConfigMaps | Container ports, service ports, env var references |
+| Helm Charts | `Chart.yaml` + templates | Auto-rendered via `helm template`, then parsed as K8s |
+| Environment | `.env` files | Database URLs, service hosts, API endpoints |
+| Build | `pom.xml`, `build.gradle` | Infrastructure dependencies (kafka, redis, etc.) |
 
 ## AI-Enhanced Analysis
 
-Add `--ai` to find dependencies the rule-based parsers might miss. Pick your mode:
-
-### Option A: Local (fully offline, nothing leaves your machine)
+Add `--ai` to find dependencies the rule-based parsers might miss:
 
 ```bash
-# One-time setup: install Ollama + the NuExtract extraction model
-curl -fsSL https://ollama.com/install.sh | sh
-ollama pull nuextract
-
-# Run with local AI
-segspec analyze ./your-app --ai local
+segspec analyze ./your-app --ai             # auto-detect (tries local first)
+segspec analyze ./your-app --ai local       # fully offline via Ollama + NuExtract
+segspec analyze ./your-app --ai cloud       # via Gemini Flash (free tier)
 ```
 
-**Best for:** enterprise, air-gapped networks, sensitive codebases. NuExtract is a 3.8B model by NuMind (US/France) under MIT license, built on Microsoft's Phi-3. No data leaves your laptop.
+**Local** runs NuExtract (3.8B, MIT license) via Ollama. Nothing leaves your machine. **Cloud** uses Gemini Flash (1,000 free requests/day, set `GEMINI_API_KEY`).
 
-### Option B: Cloud (zero install, free tier)
+AI-discovered dependencies are marked with medium confidence so you know to verify them.
+
+## Helm Charts
+
+Auto-detected. No flags needed:
 
 ```bash
-# One-time: get a free API key at https://aistudio.google.com/apikey
-export GEMINI_API_KEY=your-key-here
-
-# Run with cloud AI
-segspec analyze ./your-app --ai cloud
+segspec analyze ./my-helm-app
+segspec analyze ./my-helm-app --helm-values values-prod.yaml   # custom values
 ```
 
-**Best for:** quick evaluation, CI/CD pipelines, teams that don't want to manage local models. Uses Google's Gemini Flash (free tier: 1,000 requests/day).
-
-### Auto-detect
-
-```bash
-segspec analyze ./your-app --ai
-```
-
-Without `local` or `cloud`, segspec checks for Ollama first (privacy-first default), then falls back to Gemini if `GEMINI_API_KEY` is set.
-
-AI-discovered dependencies are marked with `[AI]` prefix and medium confidence so you know to verify them.
-
-## CI/CD Integration
-
-Add segspec to your pipeline to keep network policies in sync with code:
-
-```yaml
-# .github/workflows/netpol.yml
-name: Network Policies
-on:
-  push:
-    branches: [main]
-
-jobs:
-  generate:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Generate Network Policies
-        run: |
-          curl -fsSL https://github.com/dormstern/segspec/releases/latest/download/segspec-linux-amd64 -o segspec
-          chmod +x segspec
-          ./segspec analyze . --format per-service > k8s/network-policies.yaml
-
-      - name: Commit policy
-        run: |
-          git add k8s/network-policies.yaml
-          git diff --cached --quiet || git commit -m "update network policies [segspec]"
-```
+Requires `helm` CLI. If unavailable, segspec skips charts with a warning and continues.
 
 ## CLI Reference
 
 ```
-segspec analyze <path>  [flags]
+segspec analyze <path> [flags]
 
-Arguments:
-  <path>    Local directory or GitHub URL (https://github.com/org/repo)
+  <path>    Local directory or GitHub URL
 
-Flags:
-  -f, --format string       Output format: summary, netpol, per-service, all (default "summary")
-  -o, --output string       Write output to file (default: stdout)
-  -i, --interactive         Review dependencies interactively before generating
-      --ai [string]         AI backend: local (Ollama), cloud (Gemini), or omit for auto-detect
-      --helm-values string  Helm values file for rendering charts
+  -f, --format string       summary, netpol, per-service, all, evidence, json (default "summary")
+  -o, --output string       Write output to file
+  -i, --interactive         Review dependencies before generating
+      --ai [string]         AI: local (Ollama), cloud (Gemini), or auto-detect
+      --helm-values string  Helm values file
+```
+
+```
+segspec diff <baseline.json> <path> [flags]
+
+  <baseline.json>   JSON from `segspec analyze --format json`
+  <path>            Directory or GitHub URL to compare against
+
+      --exit-code   Exit 1 if changes detected (for CI)
 ```
 
 ## Roadmap
 
-- First-party GitHub Action -- `uses: dormstern/segspec-action@v1`
-- Multi-format output -- AWS Security Groups, Cilium, Calico
+- GitHub Action -- `uses: dormstern/segspec-action@v1`
+- AWS Security Groups, Cilium, Calico output formats
+- Terraform security group generation
 
 ## Contributing
 
