@@ -1,8 +1,10 @@
 package model
 
 import (
+	"encoding/json"
 	"fmt"
 	"sort"
+	"time"
 )
 
 // Confidence indicates how certain we are about a discovered dependency.
@@ -16,13 +18,15 @@ const (
 
 // NetworkDependency represents a discovered network connection requirement.
 type NetworkDependency struct {
-	Source      string     `json:"source"`
-	Target      string     `json:"target"`
-	Port        int        `json:"port"`
-	Protocol    string     `json:"protocol"`
-	Description string     `json:"description"`
-	Confidence  Confidence `json:"confidence"`
-	SourceFile  string     `json:"source_file"`
+	Source       string     `json:"source"`
+	Target       string     `json:"target"`
+	Port         int        `json:"port"`
+	Protocol     string     `json:"protocol"`
+	Description  string     `json:"description"`
+	Confidence   Confidence `json:"confidence"`
+	SourceFile   string     `json:"source_file"`
+	EvidenceLine string     `json:"evidence_line,omitempty"`
+	ServiceType  string     `json:"service_type,omitempty"`
 }
 
 // Key returns a unique identifier for deduplication.
@@ -122,4 +126,59 @@ func (ds *DependencySet) EgressFor(service string) []NetworkDependency {
 // Len returns the number of unique dependencies.
 func (ds *DependencySet) Len() int {
 	return len(ds.deps)
+}
+
+// RenameSource replaces all occurrences of oldName in dep Source fields
+// (and the ServiceName) with newName. This rebuilds the dedup index since
+// Key() includes Source.
+func (ds *DependencySet) RenameSource(oldName, newName string) {
+	ds.ServiceName = newName
+	rebuilt := make([]NetworkDependency, 0, len(ds.deps))
+	ds.seen = make(map[string]bool)
+	for _, dep := range ds.deps {
+		if dep.Source == oldName {
+			dep.Source = newName
+		}
+		key := dep.Key()
+		if !ds.seen[key] {
+			ds.seen[key] = true
+			rebuilt = append(rebuilt, dep)
+		}
+	}
+	ds.deps = rebuilt
+}
+
+// dependencySetJSON is the JSON wire format for DependencySet, matching the
+// evidence JSON output produced by the renderer.
+type dependencySetJSON struct {
+	Service      string              `json:"service"`
+	Generated    string              `json:"generated"`
+	Version      string              `json:"version"`
+	Summary      json.RawMessage     `json:"summary,omitempty"`
+	Dependencies []NetworkDependency `json:"dependencies"`
+}
+
+// MarshalJSON produces the evidence JSON format.
+func (ds *DependencySet) MarshalJSON() ([]byte, error) {
+	return json.Marshal(dependencySetJSON{
+		Service:      ds.ServiceName,
+		Generated:    time.Now().Format("2006-01-02"),
+		Version:      "0.5.0",
+		Dependencies: ds.Dependencies(),
+	})
+}
+
+// UnmarshalJSON reads the evidence JSON format and rebuilds the DependencySet.
+func (ds *DependencySet) UnmarshalJSON(data []byte) error {
+	var raw dependencySetJSON
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	ds.ServiceName = raw.Service
+	ds.deps = make([]NetworkDependency, 0)
+	ds.seen = make(map[string]bool)
+	for _, dep := range raw.Dependencies {
+		ds.Add(dep)
+	}
+	return nil
 }

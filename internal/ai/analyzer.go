@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
 
@@ -435,7 +434,7 @@ Return ONLY a JSON array. No explanation, no markdown fences.
 
 `)
 	for _, f := range files {
-		sb.WriteString(fmt.Sprintf("--- file: %s ---\n%s\n\n", f.Path, redactSecrets(f.Content)))
+		sb.WriteString(fmt.Sprintf("--- file: %s ---\n%s\n\n", f.Path, model.RedactSecrets(f.Content)))
 	}
 	return sb.String()
 }
@@ -518,44 +517,21 @@ func parseResponse(text string, serviceName string) ([]model.NetworkDependency, 
 			protocol = "TCP"
 		}
 		deps = append(deps, model.NetworkDependency{
-			Source:      serviceName,
-			Target:      ad.Host,
-			Port:        ad.Port,
-			Protocol:    protocol,
-			Description: desc,
-			Confidence:  model.Medium,
-			SourceFile:  "ai-analysis",
+			Source:       serviceName,
+			Target:       ad.Host,
+			Port:         ad.Port,
+			Protocol:     protocol,
+			Description:  desc,
+			Confidence:   model.Medium,
+			SourceFile:   "ai-analysis",
+			EvidenceLine: "[AI-inferred]",
+			ServiceType:  ad.ServiceType,
 		})
 	}
 
 	return deps, nil
 }
 
-// secretKeyPattern matches key=value or key: value lines where the key
-// suggests a secret (password, token, secret, api_key, apikey, AWS creds).
-// It captures: (key)(separator)(value)
-var secretKeyPattern = regexp.MustCompile(
-	`(?i)((?:password|passwd|secret|token|api_key|apikey|` +
-		`AWS_SECRET_ACCESS_KEY|AWS_SESSION_TOKEN)` +
-		`)([=: ]+)(.+)`)
-
-// jwtPattern matches JWT tokens (eyJ...) anywhere in the text.
-var jwtPattern = regexp.MustCompile(`eyJ[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+){1,2}`)
-
-// wellKnownKeyPattern matches well-known API key prefixes.
-var wellKnownKeyPattern = regexp.MustCompile(`\b(sk-[A-Za-z0-9]{10,}|AKIA[A-Z0-9]{12,}|ghp_[A-Za-z0-9]{20,}|gho_[A-Za-z0-9]{20,})`)
-
-// redactSecrets replaces likely secret values with [REDACTED], keeping keys
-// visible so the AI can still understand config structure.
-func redactSecrets(content string) string {
-	// First, redact key=value / key: value patterns for known secret keys.
-	content = secretKeyPattern.ReplaceAllString(content, "${1}${2}[REDACTED]")
-	// Then redact JWTs anywhere in the text.
-	content = jwtPattern.ReplaceAllString(content, "[REDACTED]")
-	// Then redact well-known API key prefixes.
-	content = wellKnownKeyPattern.ReplaceAllString(content, "[REDACTED]")
-	return content
-}
 
 // truncate shortens a string to max length for error messages.
 func truncate(s string, max int) string {

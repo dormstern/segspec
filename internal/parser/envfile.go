@@ -91,6 +91,8 @@ func parseEnvFile(path string) ([]model.NetworkDependency, error) {
 
 		// Env vars are medium confidence
 		d.Confidence = model.Medium
+		d.EvidenceLine = line
+		d.ServiceType = serviceTypeFromEnvKey(key)
 
 		dedup := fmt.Sprintf("%s:%d", d.Target, d.Port)
 		if seen[dedup] {
@@ -131,6 +133,34 @@ func matchWellKnownEnv(key string) string {
 	for suffix, fallback := range suffixes {
 		if strings.HasSuffix(upper, suffix) {
 			return fallback
+		}
+	}
+	return ""
+}
+
+func serviceTypeFromEnvKey(key string) string {
+	upper := strings.ToUpper(key)
+	prefixes := []struct {
+		prefix      string
+		serviceType string
+	}{
+		{"DB_", "database"},
+		{"DATABASE_", "database"},
+		{"POSTGRES_", "database"},
+		{"MYSQL_", "database"},
+		{"MONGODB_", "database"},
+		{"MONGO_", "database"},
+		{"REDIS_", "cache"},
+		{"MEMCACHED_", "cache"},
+		{"KAFKA_", "broker"},
+		{"RABBITMQ_", "broker"},
+		{"AMQP_", "broker"},
+		{"NATS_", "broker"},
+		{"ELASTICSEARCH_", "search"},
+	}
+	for _, p := range prefixes {
+		if strings.HasPrefix(upper, p.prefix) {
+			return p.serviceType
 		}
 	}
 	return ""

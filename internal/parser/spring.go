@@ -115,6 +115,8 @@ func extractSpringDeps(cfg springConfig, path string) []model.NetworkDependency 
 	// Datasource URL (JDBC)
 	if cfg.Spring.Datasource.URL != "" {
 		if d, ok := parseJDBC(cfg.Spring.Datasource.URL, path); ok {
+			d.EvidenceLine = "spring.datasource.url: " + cfg.Spring.Datasource.URL
+			d.ServiceType = "database"
 			deps = append(deps, d)
 		}
 	}
@@ -126,12 +128,14 @@ func extractSpringDeps(cfg springConfig, path string) []model.NetworkDependency 
 			port = 6379
 		}
 		deps = append(deps, model.NetworkDependency{
-			Target:      cfg.Spring.Redis.Host,
-			Port:        port,
-			Protocol:    "TCP",
-			Description: "Redis",
-			Confidence:  model.High,
-			SourceFile:  path,
+			Target:       cfg.Spring.Redis.Host,
+			Port:         port,
+			Protocol:     "TCP",
+			Description:  "Redis",
+			Confidence:   model.High,
+			SourceFile:   path,
+			EvidenceLine: fmt.Sprintf("spring.redis.host: %s", cfg.Spring.Redis.Host),
+			ServiceType:  "cache",
 		})
 	}
 
@@ -142,12 +146,14 @@ func extractSpringDeps(cfg springConfig, path string) []model.NetworkDependency 
 			port = 6379
 		}
 		deps = append(deps, model.NetworkDependency{
-			Target:      cfg.Spring.Data.Redis.Host,
-			Port:        port,
-			Protocol:    "TCP",
-			Description: "Redis",
-			Confidence:  model.High,
-			SourceFile:  path,
+			Target:       cfg.Spring.Data.Redis.Host,
+			Port:         port,
+			Protocol:     "TCP",
+			Description:  "Redis",
+			Confidence:   model.High,
+			SourceFile:   path,
+			EvidenceLine: fmt.Sprintf("spring.data.redis.host: %s", cfg.Spring.Data.Redis.Host),
+			ServiceType:  "cache",
 		})
 	}
 
@@ -155,12 +161,14 @@ func extractSpringDeps(cfg springConfig, path string) []model.NetworkDependency 
 	if cfg.Spring.Kafka.BootstrapServers != "" {
 		for _, broker := range parseKafkaBrokers(cfg.Spring.Kafka.BootstrapServers) {
 			deps = append(deps, model.NetworkDependency{
-				Target:      broker.host,
-				Port:        broker.port,
-				Protocol:    "TCP",
-				Description: "Kafka",
-				Confidence:  model.High,
-				SourceFile:  path,
+				Target:       broker.host,
+				Port:         broker.port,
+				Protocol:     "TCP",
+				Description:  "Kafka",
+				Confidence:   model.High,
+				SourceFile:   path,
+				EvidenceLine: "spring.kafka.bootstrap-servers: " + cfg.Spring.Kafka.BootstrapServers,
+				ServiceType:  "broker",
 			})
 		}
 	}
@@ -172,12 +180,14 @@ func extractSpringDeps(cfg springConfig, path string) []model.NetworkDependency 
 			port = 5672
 		}
 		deps = append(deps, model.NetworkDependency{
-			Target:      cfg.Spring.RabbitMQ.Host,
-			Port:        port,
-			Protocol:    "TCP",
-			Description: "RabbitMQ",
-			Confidence:  model.High,
-			SourceFile:  path,
+			Target:       cfg.Spring.RabbitMQ.Host,
+			Port:         port,
+			Protocol:     "TCP",
+			Description:  "RabbitMQ",
+			Confidence:   model.High,
+			SourceFile:   path,
+			EvidenceLine: fmt.Sprintf("spring.rabbitmq.host: %s", cfg.Spring.RabbitMQ.Host),
+			ServiceType:  "broker",
 		})
 	}
 
@@ -228,6 +238,8 @@ func parseSpringProperties(path string) ([]model.NetworkDependency, error) {
 	// Datasource URL
 	if v, ok := props["spring.datasource.url"]; ok {
 		if d, found := parseJDBC(v, path); found {
+			d.EvidenceLine = "spring.datasource.url=" + v
+			d.ServiceType = "database"
 			deps = append(deps, d)
 		}
 	}
@@ -241,12 +253,14 @@ func parseSpringProperties(path string) ([]model.NetworkDependency, error) {
 			}
 		}
 		deps = append(deps, model.NetworkDependency{
-			Target:      host,
-			Port:        port,
-			Protocol:    "TCP",
-			Description: "Redis",
-			Confidence:  model.High,
-			SourceFile:  path,
+			Target:       host,
+			Port:         port,
+			Protocol:     "TCP",
+			Description:  "Redis",
+			Confidence:   model.High,
+			SourceFile:   path,
+			EvidenceLine: "spring.redis.host=" + host,
+			ServiceType:  "cache",
 		})
 	}
 
@@ -254,12 +268,14 @@ func parseSpringProperties(path string) ([]model.NetworkDependency, error) {
 	if v, ok := props["spring.kafka.bootstrap-servers"]; ok {
 		for _, broker := range parseKafkaBrokers(v) {
 			deps = append(deps, model.NetworkDependency{
-				Target:      broker.host,
-				Port:        broker.port,
-				Protocol:    "TCP",
-				Description: "Kafka",
-				Confidence:  model.High,
-				SourceFile:  path,
+				Target:       broker.host,
+				Port:         broker.port,
+				Protocol:     "TCP",
+				Description:  "Kafka",
+				Confidence:   model.High,
+				SourceFile:   path,
+				EvidenceLine: "spring.kafka.bootstrap-servers=" + v,
+				ServiceType:  "broker",
 			})
 		}
 	}
@@ -273,12 +289,14 @@ func parseSpringProperties(path string) ([]model.NetworkDependency, error) {
 			}
 		}
 		deps = append(deps, model.NetworkDependency{
-			Target:      host,
-			Port:        port,
-			Protocol:    "TCP",
-			Description: "RabbitMQ",
-			Confidence:  model.High,
-			SourceFile:  path,
+			Target:       host,
+			Port:         port,
+			Protocol:     "TCP",
+			Description:  "RabbitMQ",
+			Confidence:   model.High,
+			SourceFile:   path,
+			EvidenceLine: "spring.rabbitmq.host=" + host,
+			ServiceType:  "broker",
 		})
 	}
 
@@ -407,6 +425,7 @@ func parseJDBC(raw, sourceFile string) (model.NetworkDependency, bool) {
 func extractFromValue(val, sourceFile string) (model.NetworkDependency, bool) {
 	// Try JDBC first
 	if d, ok := parseJDBC(val, sourceFile); ok {
+		d.EvidenceLine = val
 		return d, true
 	}
 
@@ -423,12 +442,13 @@ func extractFromValue(val, sourceFile string) (model.NetworkDependency, bool) {
 				port = 80
 			}
 			return model.NetworkDependency{
-				Target:      host,
-				Port:        port,
-				Protocol:    "TCP",
-				Description: "HTTP service",
-				Confidence:  model.High,
-				SourceFile:  sourceFile,
+				Target:       host,
+				Port:         port,
+				Protocol:     "TCP",
+				Description:  "HTTP service",
+				Confidence:   model.High,
+				SourceFile:   sourceFile,
+				EvidenceLine: val,
 			}, true
 		}
 	}
@@ -438,12 +458,13 @@ func extractFromValue(val, sourceFile string) (model.NetworkDependency, bool) {
 	if matches != nil {
 		port, _ := strconv.Atoi(matches[2])
 		return model.NetworkDependency{
-			Target:      matches[1],
-			Port:        port,
-			Protocol:    "TCP",
-			Description: "network service",
-			Confidence:  model.Medium,
-			SourceFile:  sourceFile,
+			Target:       matches[1],
+			Port:         port,
+			Protocol:     "TCP",
+			Description:  "network service",
+			Confidence:   model.Medium,
+			SourceFile:   sourceFile,
+			EvidenceLine: val,
 		}, true
 	}
 

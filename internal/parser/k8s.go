@@ -100,13 +100,14 @@ func parseWorkload(doc map[string]interface{}, path string) []model.NetworkDepen
 			port := toInt(pm["containerPort"])
 			if port > 0 {
 				deps = append(deps, model.NetworkDependency{
-					Source:      workloadName,
-					Target:      workloadName,
-					Port:        port,
-					Protocol:    "TCP",
-					Description: fmt.Sprintf("container port %d", port),
-					Confidence:  model.High,
-					SourceFile:  path,
+					Source:       workloadName,
+					Target:       workloadName,
+					Port:         port,
+					Protocol:     "TCP",
+					Description:  fmt.Sprintf("container port %d", port),
+					Confidence:   model.High,
+					SourceFile:   path,
+					EvidenceLine: fmt.Sprintf("containerPort: %d", port),
 				})
 			}
 		}
@@ -131,13 +132,14 @@ func parseWorkload(doc map[string]interface{}, path string) []model.NetworkDepen
 					refName, _ := cmRef["name"].(string)
 					if refName != "" {
 						deps = append(deps, model.NetworkDependency{
-							Source:      workloadName,
-							Target:      refName,
-							Port:        0,
-							Protocol:    "TCP",
-							Description: fmt.Sprintf("env %s references ConfigMap %s", envName, refName),
-							Confidence:  model.Medium,
-							SourceFile:  path,
+							Source:       workloadName,
+							Target:       refName,
+							Port:         0,
+							Protocol:     "TCP",
+							Description:  fmt.Sprintf("env %s references ConfigMap %s", envName, refName),
+							Confidence:   model.Medium,
+							SourceFile:   path,
+							EvidenceLine: fmt.Sprintf("valueFrom: configMapKeyRef/%s", refName),
 						})
 					}
 				}
@@ -145,13 +147,14 @@ func parseWorkload(doc map[string]interface{}, path string) []model.NetworkDepen
 					refName, _ := secRef["name"].(string)
 					if refName != "" {
 						deps = append(deps, model.NetworkDependency{
-							Source:      workloadName,
-							Target:      refName,
-							Port:        0,
-							Protocol:    "TCP",
-							Description: fmt.Sprintf("env %s references Secret %s", envName, refName),
-							Confidence:  model.Medium,
-							SourceFile:  path,
+							Source:       workloadName,
+							Target:       refName,
+							Port:         0,
+							Protocol:     "TCP",
+							Description:  fmt.Sprintf("env %s references Secret %s", envName, refName),
+							Confidence:   model.Medium,
+							SourceFile:   path,
+							EvidenceLine: fmt.Sprintf("valueFrom: secretKeyRef/%s", refName),
 						})
 					}
 				}
@@ -181,13 +184,14 @@ func parseService(doc map[string]interface{}, path string) []model.NetworkDepend
 				desc = fmt.Sprintf("service port %d -> targetPort %d", port, targetPort)
 			}
 			deps = append(deps, model.NetworkDependency{
-				Source:      svcName,
-				Target:      svcName,
-				Port:        port,
-				Protocol:    "TCP",
-				Description: desc,
-				Confidence:  model.High,
-				SourceFile:  path,
+				Source:       svcName,
+				Target:       svcName,
+				Port:         port,
+				Protocol:     "TCP",
+				Description:  desc,
+				Confidence:   model.High,
+				SourceFile:   path,
+				EvidenceLine: fmt.Sprintf("port: %d", port),
 			})
 		}
 	}
@@ -210,7 +214,11 @@ func parseConfigMap(doc map[string]interface{}, path string) []model.NetworkDepe
 		if !ok {
 			continue
 		}
-		deps = append(deps, extractDepsFromValue(str, cmName, key, model.Medium, path)...)
+		found := extractDepsFromValue(str, cmName, key, model.Medium, path)
+		for i := range found {
+			found[i].EvidenceLine = fmt.Sprintf("%s: %s", key, str)
+		}
+		deps = append(deps, found...)
 	}
 
 	return deps
@@ -294,6 +302,7 @@ var (
 // extractDepsFromValue scans a string value for URLs, host:port, and K8s DNS patterns.
 func extractDepsFromValue(value, source, context string, confidence model.Confidence, path string) []model.NetworkDependency {
 	var deps []model.NetworkDependency
+	evidenceLine := fmt.Sprintf("%s=%s", context, value)
 
 	// Try parsing as URL first.
 	if u, err := url.Parse(value); err == nil && u.Host != "" && (u.Scheme == "http" || u.Scheme == "https" || u.Scheme == "postgresql" || u.Scheme == "postgres" || u.Scheme == "redis" || u.Scheme == "amqp" || u.Scheme == "mongodb" || u.Scheme == "mysql" || u.Scheme == "kafka") {
@@ -303,13 +312,14 @@ func extractDepsFromValue(value, source, context string, confidence model.Confid
 			port, _ = strconv.Atoi(u.Port())
 		}
 		deps = append(deps, model.NetworkDependency{
-			Source:      source,
-			Target:      host,
-			Port:        port,
-			Protocol:    "TCP",
-			Description: fmt.Sprintf("%s: URL %s", context, value),
-			Confidence:  confidence,
-			SourceFile:  path,
+			Source:       source,
+			Target:       host,
+			Port:         port,
+			Protocol:     "TCP",
+			Description:  fmt.Sprintf("%s: URL %s", context, value),
+			Confidence:   confidence,
+			SourceFile:   path,
+			EvidenceLine: evidenceLine,
 		})
 		return deps
 	}
@@ -325,13 +335,14 @@ func extractDepsFromValue(value, source, context string, confidence model.Confid
 			port, _ = strconv.Atoi(hpMatches[2])
 		}
 		deps = append(deps, model.NetworkDependency{
-			Source:      source,
-			Target:      target,
-			Port:        port,
-			Protocol:    "TCP",
-			Description: fmt.Sprintf("%s: K8s service DNS %s", context, value),
-			Confidence:  confidence,
-			SourceFile:  path,
+			Source:       source,
+			Target:       target,
+			Port:         port,
+			Protocol:     "TCP",
+			Description:  fmt.Sprintf("%s: K8s service DNS %s", context, value),
+			Confidence:   confidence,
+			SourceFile:   path,
+			EvidenceLine: evidenceLine,
 		})
 		return deps
 	}
@@ -346,13 +357,14 @@ func extractDepsFromValue(value, source, context string, confidence model.Confid
 				continue
 			}
 			deps = append(deps, model.NetworkDependency{
-				Source:      source,
-				Target:      host,
-				Port:        port,
-				Protocol:    "TCP",
-				Description: fmt.Sprintf("%s: host:port %s:%d", context, host, port),
-				Confidence:  confidence,
-				SourceFile:  path,
+				Source:       source,
+				Target:       host,
+				Port:         port,
+				Protocol:     "TCP",
+				Description:  fmt.Sprintf("%s: host:port %s:%d", context, host, port),
+				Confidence:   confidence,
+				SourceFile:   path,
+				EvidenceLine: evidenceLine,
 			})
 		}
 	}

@@ -70,13 +70,14 @@ func parseCompose(path string) ([]model.NetworkDependency, error) {
 			containerPort := parseContainerPort(p)
 			if containerPort > 0 {
 				deps = append(deps, model.NetworkDependency{
-					Source:      serviceName,
-					Target:      serviceName,
-					Port:        containerPort,
-					Protocol:    "TCP",
-					Description: "exposed port",
-					Confidence:  model.High,
-					SourceFile:  path,
+					Source:       serviceName,
+					Target:       serviceName,
+					Port:         containerPort,
+					Protocol:     "TCP",
+					Description:  "exposed port",
+					Confidence:   model.High,
+					SourceFile:   path,
+					EvidenceLine: fmt.Sprintf("ports: %s", p),
 				})
 			}
 		}
@@ -85,12 +86,13 @@ func parseCompose(path string) ([]model.NetworkDependency, error) {
 		depNames := parseDependsOn(svc.DependsOn)
 		for _, depName := range depNames {
 			dep := model.NetworkDependency{
-				Source:      serviceName,
-				Target:      depName,
-				Protocol:    "TCP",
-				Description: "depends_on",
-				Confidence:  model.Medium,
-				SourceFile:  path,
+				Source:       serviceName,
+				Target:       depName,
+				Protocol:     "TCP",
+				Description:  "depends_on",
+				Confidence:   model.Medium,
+				SourceFile:   path,
+				EvidenceLine: fmt.Sprintf("depends_on: %s", depName),
 			}
 			// Try to infer port from the dependent service's image
 			if depSvc, ok := cf.Services[depName]; ok {
@@ -98,6 +100,7 @@ func parseCompose(path string) ([]model.NetworkDependency, error) {
 					dep.Port = port
 					dep.Description = desc
 					dep.Confidence = model.High
+					dep.ServiceType = serviceTypeFromDesc(desc)
 				}
 			}
 			deps = append(deps, dep)
@@ -106,21 +109,24 @@ func parseCompose(path string) ([]model.NetworkDependency, error) {
 		// Image: infer well-known service ports
 		if port, desc := inferFromImage(svc.Image); port > 0 {
 			deps = append(deps, model.NetworkDependency{
-				Source:      serviceName,
-				Target:      serviceName,
-				Port:        port,
-				Protocol:    "TCP",
-				Description: desc + " (inferred from image)",
-				Confidence:  model.Low,
-				SourceFile:  path,
+				Source:       serviceName,
+				Target:       serviceName,
+				Port:         port,
+				Protocol:     "TCP",
+				Description:  desc + " (inferred from image)",
+				Confidence:   model.Low,
+				SourceFile:   path,
+				EvidenceLine: fmt.Sprintf("image: %s", svc.Image),
+				ServiceType:  serviceTypeFromDesc(desc),
 			})
 		}
 
 		// Environment: scan for URLs/connection strings
 		envVars := parseEnvironment(svc.Environment)
-		for _, val := range envVars {
+		for key, val := range envVars {
 			if d, ok := extractFromValue(val, path); ok {
 				d.Source = serviceName
+				d.EvidenceLine = fmt.Sprintf("%s=%s", key, val)
 				if d.Confidence == model.High {
 					d.Confidence = model.Medium
 				}
@@ -176,6 +182,22 @@ func parseDependsOn(v interface{}) []string {
 		return names
 	}
 	return nil
+}
+
+// serviceTypeFromDesc maps a well-known image description to a service type.
+func serviceTypeFromDesc(desc string) string {
+	switch desc {
+	case "PostgreSQL", "MySQL", "MariaDB", "MongoDB":
+		return "database"
+	case "Redis", "Memcached":
+		return "cache"
+	case "Kafka", "RabbitMQ", "NATS":
+		return "broker"
+	case "Elasticsearch":
+		return "search"
+	default:
+		return ""
+	}
 }
 
 // inferFromImage checks if an image name matches a well-known service.
