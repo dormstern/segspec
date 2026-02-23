@@ -371,6 +371,10 @@ segspec diff <baseline.json> <path> [flags]
 - AWS Security Groups, Cilium, Calico output formats
 - Terraform security group generation
 
+## Author
+
+Built by [Dor Morgenstern](https://www.linkedin.com/in/dormorgenstern/) — former PM at Orchid Security, decade of network-layer product work.
+
 ## Contributing
 
 Contributions welcome. Open an issue first for anything non-trivial. PRs should include tests.
