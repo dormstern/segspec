@@ -91,6 +91,21 @@ func normalizeGitHubURL(raw string) string {
 	return "https://" + raw
 }
 
+// repoNameFromURL extracts the repository name from a GitHub URL.
+// e.g. "https://github.com/PostHog/posthog" -> "posthog"
+func repoNameFromURL(rawURL string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil || u.Path == "" {
+		return ""
+	}
+	name := strings.TrimSuffix(u.Path, ".git")
+	name = strings.TrimSuffix(name, "/")
+	if idx := strings.LastIndex(name, "/"); idx >= 0 {
+		name = name[idx+1:]
+	}
+	return name
+}
+
 // cloneRepo shallow-clones the given git URL into a temp directory and
 // returns the directory path. The caller is responsible for removing it.
 // A 60-second timeout prevents hanging on unresponsive git servers.
@@ -117,10 +132,12 @@ func cloneRepo(url string) (string, error) {
 
 func runAnalyze(cmd *cobra.Command, args []string) error {
 	path := args[0]
+	repoName := "" // set when cloning a GitHub URL
 
 	// If the argument looks like a GitHub URL, clone it first.
 	if isGitHubURL(path) {
 		url := normalizeGitHubURL(path)
+		repoName = repoNameFromURL(url)
 		fmt.Fprintf(os.Stderr, "Cloning %s...\n", url)
 		cloneDir, err := cloneRepo(url)
 		if err != nil {
@@ -145,6 +162,10 @@ func runAnalyze(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("analysis failed: %w", err)
 	}
+	// Override temp dir name with repo name in service name and dep sources.
+	if repoName != "" {
+		ds.RenameSource(ds.ServiceName, repoName)
+	}
 	if len(warnings) > 0 {
 		fmt.Fprintf(os.Stderr, "Warning: %d file(s) could not be parsed (use --verbose for details)\n", len(warnings))
 	}
@@ -161,7 +182,11 @@ func runAnalyze(cmd *cobra.Command, args []string) error {
 	}
 
 	if ds.Len() == 0 {
-		fmt.Fprintln(cmd.OutOrStdout(), "No network dependencies found.")
+		if outputFormat == "json" {
+			fmt.Fprintln(cmd.OutOrStdout(), "{}")
+		} else {
+			fmt.Fprintln(cmd.OutOrStdout(), "No network dependencies found.")
+		}
 		return nil
 	}
 
@@ -203,8 +228,12 @@ func runAnalyze(cmd *cobra.Command, args []string) error {
 		fmt.Fprint(out, renderer.Summary(ds))
 		fmt.Fprintln(out, "---")
 		fmt.Fprint(out, renderer.NetworkPolicy(ds))
+	case "evidence":
+		fmt.Fprint(out, renderer.Evidence(ds))
+	case "json":
+		fmt.Fprint(out, renderer.EvidenceJSON(ds))
 	default:
-		return fmt.Errorf("unknown format: %s (valid: summary, netpol, per-service, all)", outputFormat)
+		return fmt.Errorf("unknown format: %s (valid: summary, netpol, per-service, all, evidence, json)", outputFormat)
 	}
 
 	return nil

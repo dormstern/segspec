@@ -34,6 +34,6 @@ func Execute() {
 }
 
 func init() {
-	rootCmd.PersistentFlags().StringVarP(&outputFormat, "format", "f", "summary", "Output format: summary, netpol, per-service, all")
+	rootCmd.PersistentFlags().StringVarP(&outputFormat, "format", "f", "summary", "Output format: summary, netpol, per-service, all, evidence, json")
 	rootCmd.PersistentFlags().StringVarP(&outputFile, "output", "o", "", "Write output to file (default: stdout)")
 }
