@@ -373,7 +373,7 @@ segspec diff <baseline.json> <path> [flags]
 
 ## Author
 
-Built by [Dor Morgenstern](https://www.linkedin.com/in/dormorgenstern/) — ex-product lead at Orchid Security and Torq, building and shipping network and security products for over a decade.
+Built by [Dor Morgenstern](https://www.linkedin.com/in/dor-morgenstern/) — ex-product lead at Orchid Security and Torq, building and shipping network and security products for over a decade.
 
 ## Contributing
 
