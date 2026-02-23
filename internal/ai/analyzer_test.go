@@ -1031,7 +1031,7 @@ func TestAnalyzeCloudEndToEnd(t *testing.T) {
 
 func TestRedactSecretsPasswordEquals(t *testing.T) {
 	input := "db.password=SuperSecret123"
-	result := redactSecrets(input)
+	result := model.RedactSecrets(input)
 	if strings.Contains(result, "SuperSecret123") {
 		t.Errorf("password value should be redacted, got: %s", result)
 	}
@@ -1045,7 +1045,7 @@ func TestRedactSecretsPasswordEquals(t *testing.T) {
 
 func TestRedactSecretsPasswordColon(t *testing.T) {
 	input := "password: my-secret-pass"
-	result := redactSecrets(input)
+	result := model.RedactSecrets(input)
 	if strings.Contains(result, "my-secret-pass") {
 		t.Errorf("password value should be redacted, got: %s", result)
 	}
@@ -1056,7 +1056,7 @@ func TestRedactSecretsPasswordColon(t *testing.T) {
 
 func TestRedactSecretsToken(t *testing.T) {
 	input := "token=abc123def456"
-	result := redactSecrets(input)
+	result := model.RedactSecrets(input)
 	if strings.Contains(result, "abc123def456") {
 		t.Errorf("token value should be redacted, got: %s", result)
 	}
@@ -1067,7 +1067,7 @@ func TestRedactSecretsToken(t *testing.T) {
 
 func TestRedactSecretsAPIKey(t *testing.T) {
 	input := "api_key=myapikey123"
-	result := redactSecrets(input)
+	result := model.RedactSecrets(input)
 	if strings.Contains(result, "myapikey123") {
 		t.Errorf("api_key value should be redacted, got: %s", result)
 	}
@@ -1075,7 +1075,7 @@ func TestRedactSecretsAPIKey(t *testing.T) {
 
 func TestRedactSecretsApiKeyVariant(t *testing.T) {
 	input := "apikey=myapikey123"
-	result := redactSecrets(input)
+	result := model.RedactSecrets(input)
 	if strings.Contains(result, "myapikey123") {
 		t.Errorf("apikey value should be redacted, got: %s", result)
 	}
@@ -1083,7 +1083,7 @@ func TestRedactSecretsApiKeyVariant(t *testing.T) {
 
 func TestRedactSecretsSecret(t *testing.T) {
 	input := "secret: very-secret-value"
-	result := redactSecrets(input)
+	result := model.RedactSecrets(input)
 	if strings.Contains(result, "very-secret-value") {
 		t.Errorf("secret value should be redacted, got: %s", result)
 	}
@@ -1091,7 +1091,7 @@ func TestRedactSecretsSecret(t *testing.T) {
 
 func TestRedactSecretsAWSKeys(t *testing.T) {
 	input := "AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY\nAWS_SESSION_TOKEN=FwoGZX..."
-	result := redactSecrets(input)
+	result := model.RedactSecrets(input)
 	if strings.Contains(result, "wJalrXUtnFEMI") {
 		t.Errorf("AWS_SECRET_ACCESS_KEY should be redacted, got: %s", result)
 	}
@@ -1102,7 +1102,7 @@ func TestRedactSecretsAWSKeys(t *testing.T) {
 
 func TestRedactSecretsJWT(t *testing.T) {
 	input := "auth_token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U"
-	result := redactSecrets(input)
+	result := model.RedactSecrets(input)
 	if strings.Contains(result, "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9") {
 		t.Errorf("JWT should be redacted, got: %s", result)
 	}
@@ -1110,7 +1110,7 @@ func TestRedactSecretsJWT(t *testing.T) {
 
 func TestRedactSecretsJWTStandalone(t *testing.T) {
 	input := "token: eyJhbGciOiJIUzI1NiJ9.eyJkYXRhIjoiZm9vIn0.signature"
-	result := redactSecrets(input)
+	result := model.RedactSecrets(input)
 	if strings.Contains(result, "eyJhbGciOiJIUzI1NiJ9") {
 		t.Errorf("JWT should be redacted, got: %s", result)
 	}
@@ -1133,7 +1133,7 @@ func TestRedactSecretsAPIKeyPatterns(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := redactSecrets(tt.input)
+			result := model.RedactSecrets(tt.input)
 			if strings.Contains(result, tt.leak) {
 				t.Errorf("API key pattern should be redacted, got: %s", result)
 			}
@@ -1146,7 +1146,7 @@ func TestRedactSecretsAPIKeyPatterns(t *testing.T) {
 
 func TestRedactSecretsPreservesNonSecrets(t *testing.T) {
 	input := "db.host: postgres\ndb.port: 5432\nspring.datasource.url: jdbc:postgresql://db:5432/mydb"
-	result := redactSecrets(input)
+	result := model.RedactSecrets(input)
 	if result != input {
 		t.Errorf("non-secret content should be unchanged\ninput:  %s\nresult: %s", input, result)
 	}
@@ -1154,7 +1154,7 @@ func TestRedactSecretsPreservesNonSecrets(t *testing.T) {
 
 func TestRedactSecretsMultipleSecrets(t *testing.T) {
 	input := "password=secret1\ntoken=secret2\nhost=postgres"
-	result := redactSecrets(input)
+	result := model.RedactSecrets(input)
 	if strings.Contains(result, "secret1") {
 		t.Errorf("password should be redacted, got: %s", result)
 	}
