@@ -173,7 +173,7 @@ func (ds *DependencySet) MarshalJSON() ([]byte, error) {
 	return json.Marshal(dependencySetJSON{
 		Service:      ds.ServiceName,
 		Generated:    time.Now().Format("2006-01-02"),
-		Version:      "0.5.0",
+		Version:      "0.6.0",
 		Dependencies: ds.Dependencies(),
 	})
 }

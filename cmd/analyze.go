@@ -189,10 +189,17 @@ func collectInputFiles(root string) []renderer.EvidenceBundleInputFile {
 	return out
 }
 
-// isSupportedInputFile is a small allow-list mirroring the file families
-// segspec's parsers care about. Kept conservative: a file we don't parse
-// shouldn't influence the input_tree_sha256 (otherwise unrelated repo
-// churn would invalidate baselines).
+// isSupportedInputFile is an allow-list mirroring the file families
+// segspec's parsers care about. The catch-all *.yml/*.yaml branch is
+// deliberate — Kubernetes manifests have arbitrary filenames and the k8s
+// parser must see them — so the specific switch cases above are
+// effectively redundant today. Side effect: unrelated YAML churn (CI
+// workflows, kustomization.yaml, Helm template scaffolding) will alter
+// input_tree_sha256 and invalidate evidence-bundle baselines.
+//
+// TODO(v0.7): replace this allow-list with "files the parsers actually
+// emitted dependencies or declarations from", tracked at parse time.
+// Until then, baselines are sensitive to incidental YAML changes.
 func isSupportedInputFile(name string) bool {
 	lower := strings.ToLower(name)
 	switch lower {
@@ -347,7 +354,9 @@ func runAnalyze(cmd *cobra.Command, args []string) error {
 
 	if ds.Len() == 0 {
 		if outputFormat == "json" {
-			fmt.Fprintln(cmd.OutOrStdout(), "{}")
+			// Route through the renderer so the parser_versions block + the
+			// documented {dependencies: []} shape are preserved on empty input.
+			fmt.Fprint(cmd.OutOrStdout(), renderer.EvidenceJSON(ds))
 		} else {
 			fmt.Fprintln(cmd.OutOrStdout(), "No network dependencies found.")
 		}

@@ -20,6 +20,7 @@ package explainer
 
 import (
 	"sort"
+	"strconv"
 
 	"github.com/dormstern/segspec/internal/validator"
 )
@@ -213,7 +214,7 @@ func summarizeEgress(p validator.Policy, eg validator.EgressRule) RuleSummary {
 	if len(eg.ToPortsPorts) > 0 {
 		ports := make([]string, 0, len(eg.ToPortsPorts))
 		for _, n := range eg.ToPortsPorts {
-			ports = append(ports, intStr(n))
+			ports = append(ports, strconv.Itoa(n))
 		}
 		parts = append(parts, "on ports "+joinHumane(ports))
 	}
@@ -266,18 +267,6 @@ func joinParts(parts []string) string {
 		out += s
 	}
 	return out
-}
-
-func intStr(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	digits := []byte{}
-	for n > 0 {
-		digits = append([]byte{byte('0' + n%10)}, digits...)
-		n /= 10
-	}
-	return string(digits)
 }
 
 func nonZeroLine(a, b int) int {
