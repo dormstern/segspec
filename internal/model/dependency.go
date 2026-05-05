@@ -17,6 +17,15 @@ const (
 )
 
 // NetworkDependency represents a discovered network connection requirement.
+//
+// Disabled, when non-empty, indicates that the workload this dep belongs to
+// has been temporarily opted out of policy enforcement via a
+// `# segspec:disable=<value>` source comment or a `segspec.io/disable`
+// label/annotation. Valid values: "ingress", "egress", "full". The renderer
+// skips emitting the corresponding rule(s) but auditors and `--format
+// summary` still surface the directive so the suppression is visible. See
+// k8s upstream #112560 for the original use case ("disable the
+// networkpolicy temporarily ... without delete-or-edit-to-match-none").
 type NetworkDependency struct {
 	Source       string     `json:"source"`
 	Target       string     `json:"target"`
@@ -27,6 +36,7 @@ type NetworkDependency struct {
 	SourceFile   string     `json:"source_file"`
 	EvidenceLine string     `json:"evidence_line,omitempty"`
 	ServiceType  string     `json:"service_type,omitempty"`
+	Disabled     string     `json:"disabled,omitempty"`
 }
 
 // Key returns a unique identifier for deduplication.

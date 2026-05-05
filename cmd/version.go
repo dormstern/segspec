@@ -6,7 +6,10 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var Version = "dev"
+// Version is the segspec release version. Set via -ldflags at release time;
+// the in-tree default is the current development version so `segspec version`
+// always reports something meaningful when run from a `go install` build.
+var Version = "0.6.0-dev"
 
 var versionCmd = &cobra.Command{
 	Use:   "version",

@@ -13,7 +13,80 @@ import (
 	"github.com/dormstern/segspec/internal/walker"
 )
 
+func TestDiffCommandExitCodeRequiresLicense(t *testing.T) {
+	resetLicenseState(t)
+	fixtureDir := findFixtureDir(t)
+
+	registry := parser.DefaultRegistry()
+	ds, _, err := walker.Walk(fixtureDir, registry)
+	if err != nil {
+		t.Fatalf("walker.Walk failed: %v", err)
+	}
+	baselineJSON, _ := json.MarshalIndent(ds, "", "  ")
+	baselineFile := filepath.Join(t.TempDir(), "baseline.json")
+	if err := os.WriteFile(baselineFile, baselineJSON, 0644); err != nil {
+		t.Fatalf("write baseline: %v", err)
+	}
+
+	buf := new(bytes.Buffer)
+	outputFormat = "summary"
+	diffExitCode = true
+
+	cmd := rootCmd
+	cmd.SetOut(buf)
+	cmd.SetErr(buf)
+	cmd.SetArgs([]string{"diff", "--exit-code", baselineFile, fixtureDir})
+
+	err = cmd.Execute()
+	if err == nil {
+		t.Fatal("expected --exit-code without license to error")
+	}
+	if !strings.Contains(err.Error(), "Pro license") {
+		t.Errorf("expected error to mention Pro license, got %q", err.Error())
+	}
+	if !strings.Contains(err.Error(), "exit-code") {
+		t.Errorf("expected error to name --exit-code, got %q", err.Error())
+	}
+	resetLicenseState(t)
+}
+
+func TestDiffCommandExitCodeWithProLicense(t *testing.T) {
+	resetLicenseState(t)
+	if _, err := resolveLicenseHelper(t, "pro"); err != nil {
+		t.Fatalf("setup license: %v", err)
+	}
+	fixtureDir := findFixtureDir(t)
+
+	registry := parser.DefaultRegistry()
+	ds, _, err := walker.Walk(fixtureDir, registry)
+	if err != nil {
+		t.Fatalf("walker.Walk failed: %v", err)
+	}
+	baselineJSON, _ := json.MarshalIndent(ds, "", "  ")
+	baselineFile := filepath.Join(t.TempDir(), "baseline.json")
+	if err := os.WriteFile(baselineFile, baselineJSON, 0644); err != nil {
+		t.Fatalf("write baseline: %v", err)
+	}
+
+	buf := new(bytes.Buffer)
+	outputFormat = "summary"
+	diffExitCode = true
+
+	cmd := rootCmd
+	cmd.SetOut(buf)
+	cmd.SetErr(buf)
+	cmd.SetArgs([]string{"diff", "--exit-code", baselineFile, fixtureDir})
+
+	// Diffing the fixture against itself is a no-op; --exit-code with no
+	// changes returns nil, not errChangesDetected.
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("expected --exit-code with pro license + no changes to succeed, got %v", err)
+	}
+	resetLicenseState(t)
+}
+
 func TestDiffCommandIdentical(t *testing.T) {
+	resetLicenseState(t)
 	fixtureDir := findFixtureDir(t)
 
 	// First, analyze the fixture directory to produce a baseline.
@@ -56,6 +129,7 @@ func TestDiffCommandIdentical(t *testing.T) {
 }
 
 func TestDiffCommandDetectsChanges(t *testing.T) {
+	resetLicenseState(t)
 	fixtureDir := findFixtureDir(t)
 
 	// Create a minimal baseline with a dep that won't be in the fixture.

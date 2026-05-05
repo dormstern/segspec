@@ -120,16 +120,27 @@ func TestEvidenceJSONBasic(t *testing.T) {
 	if len(report.Dependencies) != 2 {
 		t.Errorf("dependencies count = %d, want 2", len(report.Dependencies))
 	}
-	if report.Version != "0.5.0" {
-		t.Errorf("version = %q, want 0.5.0", report.Version)
+	if report.Version != "0.6.0" {
+		t.Errorf("version = %q, want 0.6.0", report.Version)
+	}
+	if len(report.ParserVersions) == 0 {
+		t.Error("expected parser_versions to be populated")
 	}
 }
 
 func TestEvidenceJSONEmpty(t *testing.T) {
 	ds := model.NewDependencySet("empty-app")
 	out := EvidenceJSON(ds)
-	if out != "{}\n" {
-		t.Errorf("expected '{}\\n', got %q", out)
+
+	var report evidenceReport
+	if err := json.Unmarshal([]byte(out), &report); err != nil {
+		t.Fatalf("invalid JSON for empty deps: %v", err)
+	}
+	if len(report.ParserVersions) == 0 {
+		t.Error("expected parser_versions stamp even when no dependencies were found")
+	}
+	if len(report.Dependencies) != 0 {
+		t.Errorf("expected zero dependencies, got %d", len(report.Dependencies))
 	}
 }
 

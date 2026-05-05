@@ -3,15 +3,20 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"io/fs"
 	"net/url"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
 
+	"github.com/dormstern/segspec/demo"
 	"github.com/dormstern/segspec/internal/ai"
+	"github.com/dormstern/segspec/internal/formats"
+	"github.com/dormstern/segspec/internal/license"
 	"github.com/dormstern/segspec/internal/model"
 	"github.com/dormstern/segspec/internal/parser"
 	"github.com/dormstern/segspec/internal/renderer"
@@ -19,9 +24,35 @@ import (
 	"github.com/dormstern/segspec/internal/walker"
 )
 
+// gatedFormats maps each paid output format to the license feature flag it
+// requires. Formats not in this map (summary, netpol, json) are free forever.
+var gatedFormats = map[string]string{
+	"evidence":              license.FeatureEvidenceFormat,
+	"per-service":           license.FeaturePerServiceFormat,
+	"evidence-bundle":       license.FeatureEvidenceFormat,
+	"evidence-bundle-sarif": license.FeatureEvidenceFormat,
+}
+
+// checkFormatLicense returns an *errLicenseRequired if the requested format
+// is gated and the active license doesn't unlock it.
+func checkFormatLicense(format string) error {
+	feature, gated := gatedFormats[format]
+	if !gated {
+		return nil
+	}
+	if license.IsPaidTierAllowed(activeClaims, feature) {
+		return nil
+	}
+	return newLicenseError(
+		"--format %s requires a Pro license.\nRun on a public repo or upgrade at https://segspec.dev/pro",
+		format,
+	)
+}
+
 var aiProvider string
 var interactive bool
 var helmValuesFile string
+var demoName string
 
 var analyzeCmd = &cobra.Command{
 	Use:   "analyze <path>",
@@ -48,8 +79,15 @@ Supported file types:
 AI-powered analysis (--ai flag):
   --ai         Auto-detect: tries local Ollama first, then Gemini cloud
   --ai local   Fully offline analysis via Ollama + NuExtract (ollama pull nuextract)
-  --ai cloud   Cloud analysis via Gemini Flash (set GEMINI_API_KEY)`,
-	Args: cobra.ExactArgs(1),
+  --ai cloud   Cloud analysis via Gemini Flash (set GEMINI_API_KEY)
+
+Bundled demo fixtures (--demo flag):
+  --demo list          List available demo fixtures.
+  --demo sentry-mini   Analyze a synthesized Sentry-style multi-service stack.
+  --demo microservices-demo  Analyze an adapted microservices-demo k8s manifest.
+
+The --demo flag is mutually exclusive with the positional <path> argument.`,
+	Args: cobra.MaximumNArgs(1),
 	RunE: runAnalyze,
 }
 
@@ -58,6 +96,7 @@ func init() {
 	analyzeCmd.Flag("ai").NoOptDefVal = "auto"
 	analyzeCmd.Flags().BoolVarP(&interactive, "interactive", "i", false, "Review dependencies interactively before generating output")
 	analyzeCmd.Flags().StringVar(&helmValuesFile, "helm-values", "", "Helm values file to use when rendering charts")
+	analyzeCmd.Flags().StringVar(&demoName, "demo", "", "Analyze a bundled demo fixture instead of a path. Use 'list' to see available demos.")
 	rootCmd.AddCommand(analyzeCmd)
 }
 
@@ -106,6 +145,71 @@ func repoNameFromURL(rawURL string) string {
 	return name
 }
 
+// collectInputFiles walks the analyzed directory and returns the (path,
+// content) pairs that feed the evidence-bundle's input_tree_sha256. The
+// walk mirrors the rules used by the parser walker: skip hidden dirs,
+// node_modules, and anything outside the supported config families.
+//
+// Errors are swallowed individually (a single unreadable file should not
+// kill a renderer) but the walk itself stops on a hard error from
+// filepath.WalkDir, in which case the partial set of files collected so
+// far is returned.
+func collectInputFiles(root string) []renderer.EvidenceBundleInputFile {
+	var out []renderer.EvidenceBundleInputFile
+	_ = filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() {
+			name := d.Name()
+			if name == "node_modules" || name == ".git" || (len(name) > 1 && strings.HasPrefix(name, ".")) {
+				if p != root {
+					return filepath.SkipDir
+				}
+			}
+			return nil
+		}
+		if !isSupportedInputFile(d.Name()) {
+			return nil
+		}
+		content, readErr := os.ReadFile(p)
+		if readErr != nil {
+			return nil
+		}
+		rel, relErr := filepath.Rel(root, p)
+		if relErr != nil {
+			rel = p
+		}
+		out = append(out, renderer.EvidenceBundleInputFile{
+			Path:    filepath.ToSlash(rel),
+			Content: content,
+		})
+		return nil
+	})
+	return out
+}
+
+// isSupportedInputFile is a small allow-list mirroring the file families
+// segspec's parsers care about. Kept conservative: a file we don't parse
+// shouldn't influence the input_tree_sha256 (otherwise unrelated repo
+// churn would invalidate baselines).
+func isSupportedInputFile(name string) bool {
+	lower := strings.ToLower(name)
+	switch lower {
+	case "docker-compose.yml", "docker-compose.yaml", "compose.yml", "compose.yaml",
+		"application.yml", "application.yaml", "application.properties",
+		"pom.xml", "build.gradle", "build.gradle.kts":
+		return true
+	}
+	if strings.HasSuffix(lower, ".env") || lower == ".env" {
+		return true
+	}
+	if strings.HasSuffix(lower, ".yml") || strings.HasSuffix(lower, ".yaml") {
+		return true
+	}
+	return false
+}
+
 // cloneRepo shallow-clones the given git URL into a temp directory and
 // returns the directory path. The caller is responsible for removing it.
 // A 60-second timeout prevents hanging on unresponsive git servers.
@@ -131,8 +235,68 @@ func cloneRepo(url string) (string, error) {
 }
 
 func runAnalyze(cmd *cobra.Command, args []string) error {
+	// Resolve --format aliases BEFORE the license check and the format
+	// switch: that way a gated alias (e.g. `cilium-network-policy`)
+	// canonicalizes to `cilium` and goes through the same code path as
+	// the canonical name, with a stderr deprecation warning emitted
+	// once. Warnings go to stderr only so rendered YAML on stdout
+	// stays pipeable into kubectl apply.
+	if canonical, wasAlias := formats.Canonicalize(outputFormat); wasAlias {
+		fmt.Fprintf(os.Stderr, "Warning: --format %s is deprecated, use --format %s\n", outputFormat, canonical)
+		outputFormat = canonical
+	}
+
+	// License gate runs FIRST so we don't waste time cloning, walking, or
+	// invoking AI providers for a request that's about to be rejected.
+	if err := checkFormatLicense(outputFormat); err != nil {
+		return err
+	}
+
+	// --demo is mutually exclusive with the positional <path> argument.
+	// Combining them would silently prefer one over the other, which is
+	// the kind of foot-gun that wastes a beginner's first 60 seconds.
+	if demoName != "" && len(args) > 0 {
+		return fmt.Errorf("--demo and a positional <path> are mutually exclusive (got --demo %q and path %q)", demoName, args[0])
+	}
+
+	// Handle --demo dispatch before the path checks. `--demo list` is a
+	// pure listing op; a named demo materializes the embedded fixture
+	// into a temp dir and falls through to the normal walker path.
+	if demoName != "" {
+		if demoName == "list" {
+			out := cmd.OutOrStdout()
+			fmt.Fprintln(out, "Available demos:")
+			for _, d := range demo.Catalog() {
+				fmt.Fprintf(out, "  %-20s %s\n", d.Name, d.Description)
+			}
+			fmt.Fprintln(out)
+			fmt.Fprintln(out, "Run: segspec analyze --demo <name>")
+			return nil
+		}
+		resolved, err := demo.Resolve(demoName)
+		if err != nil {
+			return err
+		}
+		demoDir, err := resolved.Materialize()
+		if err != nil {
+			return fmt.Errorf("materialize demo %q: %w", resolved.Name, err)
+		}
+		defer os.RemoveAll(demoDir)
+		args = []string{demoDir}
+	}
+
+	if len(args) == 0 {
+		return fmt.Errorf("missing path argument (or use --demo <name>; try --demo list)")
+	}
+
 	path := args[0]
 	repoName := "" // set when cloning a GitHub URL
+
+	// Demo paths get a stable service name in the output rather than the
+	// random temp-dir basename ("segspec-demo-sentry-mini-1234567").
+	if demoName != "" {
+		repoName = demoName
+	}
 
 	// If the argument looks like a GitHub URL, clone it first.
 	if isGitHubURL(path) {
@@ -230,10 +394,20 @@ func runAnalyze(cmd *cobra.Command, args []string) error {
 		fmt.Fprint(out, renderer.NetworkPolicy(ds))
 	case "evidence":
 		fmt.Fprint(out, renderer.Evidence(ds))
+	case "audit":
+		fmt.Fprint(out, renderer.Audit(ds))
+	case "default-deny":
+		fmt.Fprint(out, renderer.DefaultDeny(ds))
+	case "cilium":
+		fmt.Fprint(out, renderer.Cilium(ds))
 	case "json":
 		fmt.Fprint(out, renderer.EvidenceJSON(ds))
+	case "evidence-bundle":
+		fmt.Fprint(out, renderer.EvidenceBundleJSON(ds, Version, collectInputFiles(path), parser.Versions()))
+	case "evidence-bundle-sarif":
+		fmt.Fprint(out, renderer.EvidenceBundleSARIF(ds, Version, collectInputFiles(path), parser.Versions()))
 	default:
-		return fmt.Errorf("unknown format: %s (valid: summary, netpol, per-service, all, evidence, json)", outputFormat)
+		return fmt.Errorf("unknown format: %s (valid: summary, netpol, per-service, all, evidence, audit, default-deny, cilium, json, evidence-bundle, evidence-bundle-sarif)", outputFormat)
 	}
 
 	return nil

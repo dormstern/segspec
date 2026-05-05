@@ -1,0 +1,47 @@
+# Synthesized Sentry-style Helm values snippet for segspec demo.
+# License-clean: not copied from getsentry/self-hosted or sentry-kubernetes/charts.
+# Mirrors the shape of values commonly seen in Sentry Helm deployments.
+
+sentry:
+  web:
+    env:
+      - name: SENTRY_POSTGRES_HOST
+        value: "sentry-postgres"
+      - name: SENTRY_REDIS_HOST
+        value: "sentry-redis-master"
+      - name: SENTRY_KAFKA_BOOTSTRAP_SERVERS
+        value: "sentry-kafka:9092"
+
+  worker:
+    env:
+      - name: SENTRY_POSTGRES_HOST
+        value: "sentry-postgres"
+      - name: SENTRY_REDIS_HOST
+        value: "sentry-redis-master"
+
+postgresql:
+  enabled: true
+  primary:
+    service:
+      ports:
+        postgresql: 5432
+
+redis:
+  enabled: true
+  master:
+    service:
+      ports:
+        redis: 6379
+
+kafka:
+  enabled: true
+  service:
+    ports:
+      client: 9092
+
+clickhouse:
+  enabled: true
+  service:
+    ports:
+      http: 8123
+      tcp: 9000

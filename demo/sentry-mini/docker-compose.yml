@@ -1,0 +1,196 @@
+# Synthesized Sentry-style multi-service compose stack for segspec demo.
+# NOT a real Sentry deployment. Plausible service shape only — service
+# names and ports mirror Sentry's documented architecture so the dependency
+# graph segspec extracts looks realistic. License-clean: no upstream config
+# was copied. See README.md in this directory.
+version: "3.8"
+
+x-sentry-defaults: &sentry_defaults
+  restart: unless-stopped
+  environment:
+    SENTRY_SECRET_KEY: "demo-not-a-real-key"
+    SENTRY_POSTGRES_HOST: postgres
+    SENTRY_POSTGRES_PORT: "5432"
+    SENTRY_DB_NAME: sentry
+    SENTRY_DB_USER: sentry
+    SENTRY_REDIS_HOST: redis
+    SENTRY_REDIS_PORT: "6379"
+    SENTRY_MEMCACHED_HOST: memcached
+    SENTRY_MEMCACHED_PORT: "11211"
+    SENTRY_KAFKA_BOOTSTRAP_SERVERS: "kafka:9092"
+    SENTRY_SNUBA: "http://snuba-api:1218"
+    SENTRY_RELAY_URL: "http://relay:3000"
+    SENTRY_SYMBOLICATOR_URL: "http://symbolicator:3021"
+    SENTRY_VROOM_URL: "http://vroom:8085"
+    SENTRY_EMAIL_HOST: smtp
+    SENTRY_EMAIL_PORT: "25"
+    SENTRY_CLICKHOUSE_HOST: clickhouse
+    SENTRY_CLICKHOUSE_HTTP_PORT: "8123"
+    SENTRY_CLICKHOUSE_TCP_PORT: "9000"
+
+services:
+  nginx:
+    image: nginx:1.25-alpine
+    ports:
+      - "9000:80"
+    depends_on:
+      - web
+    environment:
+      UPSTREAM_WEB: "web:9000"
+      UPSTREAM_RELAY: "relay:3000"
+
+  web:
+    <<: *sentry_defaults
+    image: getsentry/sentry:24.1.0
+    command: run web
+    ports:
+      - "9001:9000"
+    depends_on:
+      - postgres
+      - redis
+      - memcached
+      - kafka
+      - snuba-api
+      - relay
+      - symbolicator
+
+  worker:
+    <<: *sentry_defaults
+    image: getsentry/sentry:24.1.0
+    command: run worker
+    depends_on:
+      - postgres
+      - redis
+      - kafka
+
+  cron:
+    <<: *sentry_defaults
+    image: getsentry/sentry:24.1.0
+    command: run cron
+    depends_on:
+      - postgres
+      - redis
+
+  ingest-consumer:
+    <<: *sentry_defaults
+    image: getsentry/sentry:24.1.0
+    command: run consumer ingest-events --consumer-group ingest-consumer
+    depends_on:
+      - kafka
+      - postgres
+
+  post-process-forwarder:
+    <<: *sentry_defaults
+    image: getsentry/sentry:24.1.0
+    command: run consumer post-process-forwarder-errors
+    depends_on:
+      - kafka
+      - redis
+
+  relay:
+    image: getsentry/relay:24.1.0
+    ports:
+      - "3000:3000"
+    environment:
+      RELAY_UPSTREAM: "http://web:9000"
+      RELAY_KAFKA_BROKERS: "kafka:9092"
+      RELAY_REDIS_URL: "redis://redis:6379"
+
+  snuba-api:
+    image: getsentry/snuba:24.1.0
+    command: api
+    environment:
+      SNUBA_KAFKA_BROKERS: "kafka:9092"
+      SNUBA_CLICKHOUSE_HOST: clickhouse
+      SNUBA_CLICKHOUSE_PORT: "9000"
+      SNUBA_CLICKHOUSE_HTTP_PORT: "8123"
+      SNUBA_REDIS_HOST: redis
+      SNUBA_REDIS_PORT: "6379"
+    ports:
+      - "1218:1218"
+    depends_on:
+      - clickhouse
+      - kafka
+      - redis
+
+  snuba-consumer:
+    image: getsentry/snuba:24.1.0
+    command: consumer --storage events
+    environment:
+      SNUBA_KAFKA_BROKERS: "kafka:9092"
+      SNUBA_CLICKHOUSE_HOST: clickhouse
+      SNUBA_CLICKHOUSE_PORT: "9000"
+    depends_on:
+      - clickhouse
+      - kafka
+
+  symbolicator:
+    image: getsentry/symbolicator:24.1.0
+    ports:
+      - "3021:3021"
+    environment:
+      SYMBOLICATOR_CACHE_DIR: /data
+      SYMBOLICATOR_REDIS_URL: "redis://redis:6379"
+
+  vroom:
+    image: getsentry/vroom:24.1.0
+    ports:
+      - "8085:8085"
+    environment:
+      VROOM_KAFKA_BROKERS: "kafka:9092"
+      VROOM_SNUBA_HOST: "http://snuba-api:1218"
+
+  postgres:
+    image: postgres:14
+    environment:
+      POSTGRES_USER: sentry
+      POSTGRES_DB: sentry
+      POSTGRES_PASSWORD: sentry
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+  memcached:
+    image: memcached:1.6-alpine
+    ports:
+      - "11211:11211"
+
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    environment:
+      KAFKA_ZOOKEEPER_CONNECT: "zookeeper:2181"
+      KAFKA_ADVERTISED_LISTENERS: "PLAINTEXT://kafka:9092"
+    ports:
+      - "9092:9092"
+    depends_on:
+      - zookeeper
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    environment:
+      ZOOKEEPER_CLIENT_PORT: "2181"
+    ports:
+      - "2181:2181"
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:23.8
+    ports:
+      - "8123:8123"
+      - "9000:9000"
+    volumes:
+      - chdata:/var/lib/clickhouse
+
+  smtp:
+    image: tianon/exim4:latest
+    ports:
+      - "25:25"
+
+volumes:
+  pgdata:
+  chdata:

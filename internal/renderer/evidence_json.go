@@ -6,14 +6,16 @@ import (
 	"time"
 
 	"github.com/dormstern/segspec/internal/model"
+	"github.com/dormstern/segspec/internal/parser"
 )
 
 type evidenceReport struct {
-	Service      string                    `json:"service"`
-	Generated    string                    `json:"generated"`
-	Version      string                    `json:"version"`
-	Summary      evidenceSummary           `json:"summary"`
-	Dependencies []model.NetworkDependency `json:"dependencies"`
+	Service        string                    `json:"service"`
+	Generated      string                    `json:"generated"`
+	Version        string                    `json:"version"`
+	ParserVersions map[string]string         `json:"parser_versions"`
+	Summary        evidenceSummary           `json:"summary"`
+	Dependencies   []model.NetworkDependency `json:"dependencies"`
 }
 
 type evidenceSummary struct {
@@ -27,7 +29,18 @@ type evidenceSummary struct {
 func EvidenceJSON(ds *model.DependencySet) string {
 	deps := ds.Dependencies()
 	if len(deps) == 0 {
-		return "{}\n"
+		// Even with zero deps we stamp parser_versions so downstream
+		// tooling (baselines, evidence bundles) can verify which parser
+		// versions ran and confirm the empty result is reproducible.
+		empty := evidenceReport{
+			ParserVersions: parser.Versions(),
+			Dependencies:   []model.NetworkDependency{},
+		}
+		data, err := json.MarshalIndent(empty, "", "  ")
+		if err != nil {
+			return fmt.Sprintf("{\"error\": \"%s\"}\n", err)
+		}
+		return string(data) + "\n"
 	}
 
 	// Redact secrets from evidence lines before serializing.
@@ -50,9 +63,10 @@ func EvidenceJSON(ds *model.DependencySet) string {
 	}
 
 	report := evidenceReport{
-		Service:   ds.ServiceName,
-		Generated: time.Now().Format("2006-01-02"),
-		Version:   "0.5.0",
+		Service:        ds.ServiceName,
+		Generated:      time.Now().Format("2006-01-02"),
+		Version:        "0.6.0",
+		ParserVersions: parser.Versions(),
 		Summary: evidenceSummary{
 			Total:  len(deps),
 			High:   highCount,

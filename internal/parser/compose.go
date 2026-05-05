@@ -62,6 +62,10 @@ func parseCompose(path string) ([]model.NetworkDependency, error) {
 		return nil, fmt.Errorf("parsing compose %s: %w", path, err)
 	}
 
+	// Per-service `# segspec:disable=...` directives are scanned from the raw
+	// bytes because the YAML AST round-trip drops comments.
+	disableMap := ScanComposeDisable(data)
+
 	var deps []model.NetworkDependency
 
 	for serviceName, svc := range cf.Services {
@@ -131,6 +135,19 @@ func parseCompose(path string) ([]model.NetworkDependency, error) {
 					d.Confidence = model.Medium
 				}
 				deps = append(deps, d)
+			}
+		}
+	}
+
+	// Stamp the Disabled directive on every dep whose source service was
+	// flagged with a `# segspec:disable=...` comment. We only match on
+	// Source so that a disabled `web` doesn't taint the inferred port for
+	// a downstream `db` that the `depends_on` edge points at — `db` is its
+	// own workload with its own (possibly absent) directive.
+	if len(disableMap) > 0 {
+		for i := range deps {
+			if d, ok := disableMap[deps[i].Source]; ok {
+				deps[i].Disabled = d
 			}
 		}
 	}

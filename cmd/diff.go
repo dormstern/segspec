@@ -1,13 +1,13 @@
 package cmd
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 
 	"github.com/spf13/cobra"
 
 	"github.com/dormstern/segspec/internal/ai"
+	"github.com/dormstern/segspec/internal/license"
 	"github.com/dormstern/segspec/internal/model"
 	"github.com/dormstern/segspec/internal/parser"
 	"github.com/dormstern/segspec/internal/renderer"
@@ -40,6 +40,17 @@ func init() {
 }
 
 func runDiff(cmd *cobra.Command, args []string) error {
+	// License gates run FIRST: --exit-code (CI integration) and the gated
+	// output formats are paid features. Reject before doing any work.
+	if diffExitCode && !license.IsPaidTierAllowed(activeClaims, license.FeatureExitCode) {
+		return newLicenseError(
+			"--exit-code requires a Pro license.\nRun on a public repo or upgrade at https://segspec.dev/pro",
+		)
+	}
+	if err := checkFormatLicense(outputFormat); err != nil {
+		return err
+	}
+
 	baselineFile := args[0]
 	path := args[1]
 
@@ -56,9 +67,18 @@ func runDiff(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("cannot read baseline file: %w", err)
 	}
-	var baseline model.DependencySet
-	if err := json.Unmarshal(data, &baseline); err != nil {
+	baseline, meta, err := readBaseline(data)
+	if err != nil {
 		return fmt.Errorf("cannot parse baseline JSON: %w", err)
+	}
+	// Version-mismatch warning: when the baseline carries provenance (new
+	// snapshot format) and was produced by a different segspec version than
+	// the one running, surface that on stderr. Legacy baselines (no metadata)
+	// stay silent — backward compatibility is non-negotiable.
+	if meta != nil && meta.SegspecVersion != "" && meta.SegspecVersion != Version {
+		fmt.Fprintf(os.Stderr,
+			"Warning: baseline was created by segspec %s; running with %s. Output may differ.\n",
+			meta.SegspecVersion, Version)
 	}
 
 	// Resolve the target path (GitHub URL or local directory).
@@ -109,7 +129,7 @@ func runDiff(cmd *cobra.Command, args []string) error {
 	}
 
 	// Compute and render the diff.
-	diff := model.DiffSets(&baseline, current)
+	diff := model.DiffSets(baseline, current)
 
 	out := cmd.OutOrStdout()
 	if outputFile != "" {
