@@ -9,20 +9,25 @@ import "crypto/ed25519"
 // be fully offline, and trusting a key fetched at runtime would defeat that
 // guarantee. To rotate the key, ship a new release.
 //
-// Generated locally with `go test ./scripts/generate-keypair/ -run TestEmitKeypair
-// -emit-keypair` (the canonical tool is scripts/generate-keypair/main.go,
-// runnable via `go run`). The matching private key lives only in the Stripe-
-// webhook signer; the development-only copy is in DEVELOPMENT_PRIVATE_KEY.txt
-// (gitignored). To rotate, regenerate the keypair, replace the bytes here,
-// update DEVELOPMENT_PRIVATE_KEY.txt + the devPrivateKeyHex constants in
-// internal/license/license_test.go and cmd/license_gate_test.go, sync
-// web/PUBLIC_KEY_FOR_GO_AGENT.txt for the Stripe agent, and ship a new
-// release. TestValidate guards against accidental drift.
+// Production / development separation:
+//   - The matching production private key lives ONLY in the licensing-service
+//     environment (e.g. Vercel env var SEGSPEC_LICENSE_PRIVATE_KEY). It is
+//     never committed to this repository.
+//   - The development keypair in DEVELOPMENT_PRIVATE_KEY.txt (gitignored) is
+//     intentionally a DIFFERENT keypair. Tests sign and verify using the dev
+//     keypair only — they never touch ProductionPublicKey at runtime. This
+//     means a leaked dev key cannot mint tokens that any shipped binary will
+//     accept.
 //
-// Public key (hex): f9b633b9fc16148bd15b024af8f694c7a0942d6ca3e0ed367d0010dda57689a3
+// Rotating in production: regenerate via `go run scripts/generate-keypair`,
+// replace the bytes here, save the new private key to
+// PRODUCTION_PRIVATE_KEY.txt (gitignored) for transfer into the licensing
+// service env, and ship a new release. The dev keypair stays put.
+//
+// Public key (hex): fa5bff61e145065cb8a2bb9a2d060bc15e36a3829d1541b26fe1a42853888264
 var ProductionPublicKey ed25519.PublicKey = ed25519.PublicKey{
-	0xf9, 0xb6, 0x33, 0xb9, 0xfc, 0x16, 0x14, 0x8b,
-	0xd1, 0x5b, 0x02, 0x4a, 0xf8, 0xf6, 0x94, 0xc7,
-	0xa0, 0x94, 0x2d, 0x6c, 0xa3, 0xe0, 0xed, 0x36,
-	0x7d, 0x00, 0x10, 0xdd, 0xa5, 0x76, 0x89, 0xa3,
+	0xfa, 0x5b, 0xff, 0x61, 0xe1, 0x45, 0x06, 0x5c,
+	0xb8, 0xa2, 0xbb, 0x9a, 0x2d, 0x06, 0x0b, 0xc1,
+	0x5e, 0x36, 0xa3, 0x82, 0x9d, 0x15, 0x41, 0xb2,
+	0x6f, 0xe1, 0xa4, 0x28, 0x53, 0x88, 0x82, 0x64,
 }

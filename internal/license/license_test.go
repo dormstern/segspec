@@ -11,11 +11,18 @@ import (
 	"time"
 )
 
-// devPrivateKeyHex is the development Ed25519 private key (seed||pubkey).
-// Its public half matches ProductionPublicKey in pubkey.go, so tokens minted
-// here verify against the in-binary production key — exactly the path the
-// Stripe webhook will exercise in production. The full key lives in
-// DEVELOPMENT_PRIVATE_KEY.txt (gitignored). Rotated together with pubkey.go.
+// devPrivateKeyHex is the development Ed25519 private key (seed||pubkey)
+// used ONLY by the test suite. It is intentionally distinct from the
+// production keypair — its public half does NOT match ProductionPublicKey.
+// Tests below sign with this key and verify against its derived public key,
+// exercising the Validate() signature path without ever depending on the
+// production keypair. A leaked dev key cannot mint tokens any shipped binary
+// will accept.
+//
+// The full key lives in DEVELOPMENT_PRIVATE_KEY.txt (gitignored). To rotate
+// the dev keypair, regenerate via `go run scripts/generate-keypair`, replace
+// these bytes plus DEVELOPMENT_PRIVATE_KEY.txt and the matching constant in
+// cmd/license_gate_test.go.
 const devPrivateKeyHex = "413459ff6d9a75ad66ab8789694eb38d3f2af7dd34d828a3f97477ef924d59c1f9b633b9fc16148bd15b024af8f694c7a0942d6ca3e0ed367d0010dda57689a3"
 
 func devPrivateKey(t *testing.T) ed25519.PrivateKey {
@@ -50,11 +57,11 @@ func TestValidate(t *testing.T) {
 	priv := devPrivateKey(t)
 	pub := priv.Public().(ed25519.PublicKey)
 
-	// Sanity check: the dev keypair really does match ProductionPublicKey.
-	// If this fails, pubkey.go has been rotated and DEVELOPMENT_PRIVATE_KEY.txt
-	// is stale.
-	if string(pub) != string(ProductionPublicKey) {
-		t.Fatalf("dev public key does not match ProductionPublicKey; rotate DEVELOPMENT_PRIVATE_KEY.txt")
+	// Intentional: the dev pubkey must NOT match ProductionPublicKey. If it
+	// does, the dev/prod separation invariant is broken — a dev-key leak
+	// would mint production-valid tokens.
+	if string(pub) == string(ProductionPublicKey) {
+		t.Fatalf("dev keypair coincides with ProductionPublicKey; rotate DEVELOPMENT_PRIVATE_KEY.txt to a fresh keypair distinct from production")
 	}
 
 	future := time.Now().Add(24 * time.Hour)

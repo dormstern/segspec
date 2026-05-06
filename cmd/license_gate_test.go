@@ -10,11 +10,17 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/dormstern/segspec/internal/license"
 )
 
 // devPrivateKeyHex matches the development keypair in
-// internal/license/DEVELOPMENT_PRIVATE_KEY.txt. Tokens minted here verify
-// against license.ProductionPublicKey, mirroring the production signing path.
+// internal/license/DEVELOPMENT_PRIVATE_KEY.txt. This keypair is INTENTIONALLY
+// distinct from production: its public half is not ProductionPublicKey.
+// resetLicenseState swaps license.ProductionPublicKey to the dev pubkey for
+// the duration of each test (with t.Cleanup restoration), so cmd-level
+// integration tests continue to exercise the gate paths. Production binaries
+// reject these tokens.
 const devPrivateKeyHex = "413459ff6d9a75ad66ab8789694eb38d3f2af7dd34d828a3f97477ef924d59c1f9b633b9fc16148bd15b024af8f694c7a0942d6ca3e0ed367d0010dda57689a3"
 
 func devPrivKey(t *testing.T) ed25519.PrivateKey {
@@ -43,6 +49,12 @@ func mintTestToken(t *testing.T, tier string, exp time.Time) string {
 
 // resetLicenseState clears every package-level variable that the license
 // pipeline touches, so tests don't bleed state into each other.
+//
+// It also swaps license.ProductionPublicKey to the dev keypair's public half
+// for the duration of the test, so tokens minted with devPrivKey verify
+// through the production code path. Production binaries ship with a
+// different ProductionPublicKey value (see internal/license/pubkey.go);
+// this swap is test-only.
 func resetLicenseState(t *testing.T) {
 	t.Helper()
 	licenseKey = ""
@@ -52,6 +64,12 @@ func resetLicenseState(t *testing.T) {
 	outputFormat = "summary"
 	outputFile = ""
 	diffExitCode = false
+
+	priv := devPrivKey(t)
+	devPub := priv.Public().(ed25519.PublicKey)
+	original := license.ProductionPublicKey
+	license.ProductionPublicKey = devPub
+	t.Cleanup(func() { license.ProductionPublicKey = original })
 }
 
 func TestResolveLicense_NoKey(t *testing.T) {

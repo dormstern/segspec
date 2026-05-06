@@ -51,3 +51,8 @@ docs/SELF-SERVE-GAPS.md
 # `git rm --cached internal/license/DEVELOPMENT_PRIVATE_KEY.txt` (founder
 # decision — don't do it silently).
 internal/license/DEVELOPMENT_PRIVATE_KEY.txt
+
+# Local-only PRODUCTION private key. Exists transiently during a rotation:
+# regenerate the keypair, paste the seed into the licensing-service secrets
+# manager, then delete this file. NEVER commit.
+internal/license/PRODUCTION_PRIVATE_KEY.txt
