@@ -82,6 +82,7 @@ func parseK8sBytes(data []byte, sourceLabel string) ([]model.NetworkDependency, 
 func parseWorkload(doc map[string]interface{}, path string) []model.NetworkDependency {
 	var deps []model.NetworkDependency
 	workloadName := metadataName(doc)
+	disabled := metadataDisable(doc)
 
 	containers := navigateSlice(doc, "spec", "template", "spec", "containers")
 	for _, c := range containers {
@@ -162,7 +163,42 @@ func parseWorkload(doc map[string]interface{}, path string) []model.NetworkDepen
 		}
 	}
 
+	// Workload-level disable directive (k8s label or annotation
+	// `segspec.io/disable: ingress|egress|full`) propagates to every dep
+	// emitted for this workload.
+	if disabled != "" {
+		for i := range deps {
+			deps[i].Disabled = disabled
+		}
+	}
+
 	return deps
+}
+
+// metadataDisable inspects a workload's metadata.labels and
+// metadata.annotations for a `segspec.io/disable` entry and returns its
+// value if it is one of the accepted directives. Labels and annotations are
+// both checked because k8s users put the same key in either spot in the
+// wild — annotations is more correct for free-form values, but RBAC-wise
+// labels are easier to grep, and we shouldn't punish either choice.
+func metadataDisable(doc map[string]interface{}) string {
+	meta, _ := doc["metadata"].(map[string]interface{})
+	if meta == nil {
+		return ""
+	}
+	for _, key := range []string{"labels", "annotations"} {
+		m, ok := meta[key].(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if v, ok := m["segspec.io/disable"].(string); ok {
+			v = strings.TrimSpace(v)
+			if validDisableValues[v] {
+				return v
+			}
+		}
+	}
+	return ""
 }
 
 // parseService extracts port information from a Service manifest.

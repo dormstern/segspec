@@ -53,11 +53,19 @@ func parseEnvFile(path string) ([]model.NetworkDependency, error) {
 
 	var deps []model.NetworkDependency
 	seen := make(map[string]bool)
+	disable := ""
 
 	scanner := bufio.NewScanner(f)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
-		if line == "" || strings.HasPrefix(line, "#") {
+		if line == "" {
+			continue
+		}
+		if strings.HasPrefix(line, "#") {
+			// Inline disable directive on a comment line — first match wins.
+			if disable == "" {
+				disable = ParseDisableDirective(line)
+			}
 			continue
 		}
 
@@ -103,6 +111,12 @@ func parseEnvFile(path string) ([]model.NetworkDependency, error) {
 	}
 	if err := scanner.Err(); err != nil {
 		return nil, fmt.Errorf("scanning %s: %w", path, err)
+	}
+
+	if disable != "" {
+		for i := range deps {
+			deps[i].Disabled = disable
+		}
 	}
 
 	return deps, nil

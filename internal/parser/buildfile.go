@@ -71,6 +71,8 @@ func parsePomXML(path string) ([]model.NetworkDependency, error) {
 		return nil, fmt.Errorf("parsing pom.xml: %w", err)
 	}
 
+	disable := ScanFileDisable(data)
+
 	var deps []model.NetworkDependency
 	for _, d := range project.Dependencies.Dependency {
 		for _, lib := range knownLibs {
@@ -91,6 +93,12 @@ func parsePomXML(path string) ([]model.NetworkDependency, error) {
 		}
 	}
 
+	if disable != "" {
+		for i := range deps {
+			deps[i].Disabled = disable
+		}
+	}
+
 	return deps, nil
 }
 
@@ -106,6 +114,8 @@ func parseBuildGradle(path string) ([]model.NetworkDependency, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	disable := ScanFileDisable(data)
 
 	var deps []model.NetworkDependency
 	lines := strings.Split(string(data), "\n")
@@ -139,6 +149,12 @@ func parseBuildGradle(path string) ([]model.NetworkDependency, error) {
 				})
 				break
 			}
+		}
+	}
+
+	if disable != "" {
+		for i := range deps {
+			deps[i].Disabled = disable
 		}
 	}
 

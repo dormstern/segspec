@@ -34,7 +34,17 @@ func Summary(ds *model.DependencySet) string {
 		if desc == "" {
 			desc = fmt.Sprintf("%s:%d/%s", dep.Target, dep.Port, dep.Protocol)
 		}
-		fmt.Fprintf(&b, "  → %s:%d/%s  [%s]  %s\n", dep.Target, dep.Port, dep.Protocol, conf, desc)
+		// Surface the source-level disable directive so operators can SEE
+		// that a workload's policies are intentionally suppressed (k8s
+		// upstream #112560 — "disable temporarily without delete-or-edit").
+		// We render the marker even though the netpol formats skip the
+		// rule; making suppression invisible would defeat the auditability
+		// principle that drives the evidence-bundle format.
+		disabledTag := ""
+		if dep.Disabled != "" {
+			disabledTag = fmt.Sprintf("  [disabled: %s]", dep.Disabled)
+		}
+		fmt.Fprintf(&b, "  → %s:%d/%s  [%s]  %s%s\n", dep.Target, dep.Port, dep.Protocol, conf, desc, disabledTag)
 		if dep.SourceFile != "" {
 			fmt.Fprintf(&b, "    source: %s\n", dep.SourceFile)
 		}

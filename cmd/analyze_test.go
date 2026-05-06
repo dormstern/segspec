@@ -8,7 +8,77 @@ import (
 	"testing"
 )
 
+func TestAnalyzeE2E_EvidenceFormatRequiresLicense(t *testing.T) {
+	resetLicenseState(t)
+	fixtureDir := findFixtureDir(t)
+
+	buf := new(bytes.Buffer)
+	outputFormat = "evidence"
+
+	cmd := rootCmd
+	cmd.SetOut(buf)
+	cmd.SetErr(buf)
+	cmd.SetArgs([]string{"analyze", fixtureDir})
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected --format evidence without a license to error")
+	}
+	if !strings.Contains(err.Error(), "Pro license") {
+		t.Errorf("expected error to mention Pro license, got %q", err.Error())
+	}
+	if !strings.Contains(err.Error(), "evidence") {
+		t.Errorf("expected error to name the gated format, got %q", err.Error())
+	}
+}
+
+func TestAnalyzeE2E_PerServiceFormatRequiresLicense(t *testing.T) {
+	resetLicenseState(t)
+	fixtureDir := findFixtureDir(t)
+
+	buf := new(bytes.Buffer)
+	outputFormat = "per-service"
+
+	cmd := rootCmd
+	cmd.SetOut(buf)
+	cmd.SetErr(buf)
+	cmd.SetArgs([]string{"analyze", fixtureDir})
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected --format per-service without a license to error")
+	}
+	if !strings.Contains(err.Error(), "Pro license") {
+		t.Errorf("expected error to mention Pro license, got %q", err.Error())
+	}
+}
+
+func TestAnalyzeE2E_EvidenceFormatWithProLicense(t *testing.T) {
+	resetLicenseState(t)
+	if _, err := resolveLicenseHelper(t, "pro"); err != nil {
+		t.Fatalf("setup license: %v", err)
+	}
+	// resolveLicenseHelper sets licenseKey but the next Execute will run
+	// PersistentPreRunE again. Make sure that path also works.
+	fixtureDir := findFixtureDir(t)
+
+	buf := new(bytes.Buffer)
+	outputFormat = "evidence"
+
+	cmd := rootCmd
+	cmd.SetOut(buf)
+	cmd.SetErr(buf)
+	cmd.SetArgs([]string{"analyze", fixtureDir})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("expected analyze --format evidence to succeed with pro license, got %v", err)
+	}
+	// Reset so later tests don't see leftover license state.
+	resetLicenseState(t)
+}
+
 func TestAnalyzeE2E_FullStack(t *testing.T) {
+	resetLicenseState(t)
 	// Find the testdata/fullstack fixture directory
 	fixtureDir := findFixtureDir(t)
 
@@ -46,6 +116,16 @@ func TestAnalyzeE2E_FullStack(t *testing.T) {
 				"---",
 			},
 		},
+		{
+			name:   "audit format produces signoff ledger",
+			format: "audit",
+			contains: []string{
+				"# Network Dependency Audit Ledger",
+				"## Workload sign-off",
+				"## Auditor checklist",
+				"Run fingerprint:",
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -76,6 +156,7 @@ func TestAnalyzeE2E_FullStack(t *testing.T) {
 }
 
 func TestAnalyzeE2E_EmptyDir(t *testing.T) {
+	resetLicenseState(t)
 	dir := t.TempDir()
 
 	buf := new(bytes.Buffer)
@@ -97,6 +178,7 @@ func TestAnalyzeE2E_EmptyDir(t *testing.T) {
 }
 
 func TestAnalyzeE2E_OutputFile(t *testing.T) {
+	resetLicenseState(t)
 	fixtureDir := findFixtureDir(t)
 	outFile := filepath.Join(t.TempDir(), "output.txt")
 
@@ -123,6 +205,7 @@ func TestAnalyzeE2E_OutputFile(t *testing.T) {
 }
 
 func TestAnalyzeE2E_InvalidPath(t *testing.T) {
+	resetLicenseState(t)
 	buf := new(bytes.Buffer)
 	outputFormat = "summary"
 	outputFile = ""
@@ -139,6 +222,7 @@ func TestAnalyzeE2E_InvalidPath(t *testing.T) {
 }
 
 func TestAnalyzeE2E_DetectsMultipleSourceTypes(t *testing.T) {
+	resetLicenseState(t)
 	fixtureDir := findFixtureDir(t)
 
 	buf := new(bytes.Buffer)
@@ -238,6 +322,64 @@ func TestNormalizeGitHubURL(t *testing.T) {
 				t.Errorf("normalizeGitHubURL(%q) = %q, want %q", tt.input, got, tt.want)
 			}
 		})
+	}
+}
+
+// TestAnalyzeE2E_FormatAliasEmitsDeprecationWarning verifies the
+// alias canonicalization is wired into runAnalyze: passing
+// `--format networkpolicy` must (1) succeed (exit-code parity with
+// the canonical `netpol` run) and (2) write a deprecation warning to
+// stderr naming both the alias and the canonical replacement. The
+// warning lives on stderr only — never stdout — so the rendered
+// NetworkPolicy YAML stays pipeable into kubectl apply.
+func TestAnalyzeE2E_FormatAliasEmitsDeprecationWarning(t *testing.T) {
+	resetLicenseState(t)
+	fixtureDir := findFixtureDir(t)
+
+	// Redirect process stderr because runAnalyze writes warnings via
+	// fmt.Fprintf(os.Stderr, ...) — cobra's SetErr only catches what
+	// cobra itself writes, not raw os.Stderr writes from RunE.
+	origStderr := os.Stderr
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe: %v", err)
+	}
+	os.Stderr = w
+	t.Cleanup(func() { os.Stderr = origStderr })
+
+	buf := new(bytes.Buffer)
+	outputFormat = "networkpolicy" // alias of "netpol"
+	outputFile = ""
+
+	cmd := rootCmd
+	cmd.SetOut(buf)
+	cmd.SetErr(buf)
+	cmd.SetArgs([]string{"analyze", fixtureDir})
+
+	execErr := cmd.Execute()
+	w.Close()
+	stderrOut := new(bytes.Buffer)
+	_, _ = stderrOut.ReadFrom(r)
+
+	if execErr != nil {
+		t.Fatalf("analyze with alias --format networkpolicy must succeed (exit-code parity with canonical netpol), got: %v", execErr)
+	}
+
+	got := stderrOut.String()
+	if !strings.Contains(got, "networkpolicy") {
+		t.Errorf("deprecation warning must name the alias used; stderr=%q", got)
+	}
+	if !strings.Contains(got, "netpol") {
+		t.Errorf("deprecation warning must name the canonical replacement; stderr=%q", got)
+	}
+	if !strings.Contains(strings.ToLower(got), "deprecat") {
+		t.Errorf("expected stderr to flag the alias as deprecated; stderr=%q", got)
+	}
+	// Stdout must still carry the rendered NetworkPolicy — alias path
+	// must not silently drop output. Renderer signature: every
+	// netpol output begins "apiVersion: networking.k8s.io".
+	if !strings.Contains(buf.String(), "apiVersion: networking.k8s.io") {
+		t.Errorf("alias run must produce same NetworkPolicy output as canonical run; stdout=%q", buf.String())
 	}
 }
 

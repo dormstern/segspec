@@ -1,0 +1,13 @@
+Adapted from Google Cloud Platform's microservices-demo project.
+Source: https://github.com/GoogleCloudPlatform/microservices-demo
+License: Apache License, Version 2.0
+Copyright 2018 Google LLC
+
+Modifications by the segspec authors (2026) for use as a demo fixture:
+- Reduced from 11 services to 6.
+- Removed loadgenerator, adservice, currencyservice, paymentservice,
+  emailservice, shippingservice deployments. Their addresses remain
+  referenced as env vars on the surviving services so the dependency
+  graph segspec extracts is still complete.
+- Removed resource limits, probes, ServiceAccount fields, and similar
+  metadata not relevant to dependency extraction.

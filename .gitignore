@@ -44,3 +44,15 @@ docs/research/
 docs/reddit-launch-posts.md
 docs/SHOWOFF.md
 docs/SELF-SERVE-GAPS.md
+
+# Local-only license dev key — never commit. The Stripe webhook signer holds
+# the real production private key; this file is just for local fixture-gen
+# and test plumbing. If git ever starts tracking it, untrack with
+# `git rm --cached internal/license/DEVELOPMENT_PRIVATE_KEY.txt` (founder
+# decision — don't do it silently).
+internal/license/DEVELOPMENT_PRIVATE_KEY.txt
+
+# Local-only PRODUCTION private key. Exists transiently during a rotation:
+# regenerate the keypair, paste the seed into the licensing-service secrets
+# manager, then delete this file. NEVER commit.
+internal/license/PRODUCTION_PRIVATE_KEY.txt

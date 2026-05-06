@@ -75,6 +75,12 @@ func parseSpringYAML(path string) ([]model.NetworkDependency, error) {
 		return nil, fmt.Errorf("reading %s: %w", path, err)
 	}
 
+	// Spring application.yml is a single-workload file: one app per file.
+	// Any `# segspec:disable=...` comment in the file disables the whole
+	// workload. ScanFileDisable tolerates the directive being anywhere in
+	// the file rather than only on line 1.
+	disable := ScanFileDisable(data)
+
 	var allDeps []model.NetworkDependency
 
 	// Use yaml.NewDecoder to read ALL documents separated by ---
@@ -103,6 +109,12 @@ func parseSpringYAML(path string) ([]model.NetworkDependency, error) {
 		}
 		found := extractURLsFromMap(raw, path)
 		allDeps = mergeUnique(allDeps, found)
+	}
+
+	if disable != "" {
+		for i := range allDeps {
+			allDeps[i].Disabled = disable
+		}
 	}
 
 	return allDeps, nil
@@ -214,10 +226,18 @@ func parseSpringProperties(path string) ([]model.NetworkDependency, error) {
 	defer f.Close()
 
 	props := make(map[string]string)
+	disable := ""
 	scanner := bufio.NewScanner(f)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
-		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, "!") {
+		if line == "" {
+			continue
+		}
+		// Comment lines: still scan for a disable directive before skipping.
+		if strings.HasPrefix(line, "#") || strings.HasPrefix(line, "!") {
+			if disable == "" {
+				disable = ParseDisableDirective(line)
+			}
 			continue
 		}
 		// Split on first = or :
@@ -322,6 +342,12 @@ func parseSpringProperties(path string) ([]model.NetworkDependency, error) {
 		}
 		if d, ok := extractFromValue(val, path); ok {
 			deps = mergeUnique(deps, []model.NetworkDependency{d})
+		}
+	}
+
+	if disable != "" {
+		for i := range deps {
+			deps[i].Disabled = disable
 		}
 	}
 
